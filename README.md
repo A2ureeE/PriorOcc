@@ -1,5 +1,7 @@
 # PriorOcc: Enhancing Occupancy Prediction with Explicit 2D Semantic Priors
 
+[English](README.md) | [简体中文](README_zh-CN.md)
+
 **PriorOcc** is an enhanced 3D occupancy prediction framework based on [FlashOCC](https://github.com/Yzichen/FlashOCC). It introduces an **Explicit 2D Semantic Prior Injection** mechanism ("Scheme C") to guide the learning of 3D voxel representations using dense 2D semantic supervision.
 
 ## 🚀 Key Features
