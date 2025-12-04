@@ -95,6 +95,14 @@ class BEVDepth(BEVDet):
         """
         imgs, sensor2keyegos, ego2globals, intrins, post_rots, post_trans, bda = self.prepare_inputs(img_inputs)
         x, _ = self.image_encoder(imgs)    # x: (B, N, C, fH, fW)
+        
+        seg_logits = None
+        if self.semantic_injector is not None:
+            B, N, C, fH, fW = x.shape
+            x = x.view(B * N, C, fH, fW)
+            x, seg_logits = self.semantic_injector(x)
+            x = x.view(B, N, -1, fH, fW)
+
         mlp_input = self.img_view_transformer.get_mlp_input(
             sensor2keyegos, ego2globals, intrins, post_rots, post_trans, bda)  # (B, N_views, 27)
 
@@ -103,7 +111,7 @@ class BEVDepth(BEVDet):
         # x: (B, C, Dy, Dx)
         # depth: (B*N, D, fH, fW)
         x = self.bev_encoder(x)
-        return [x], depth
+        return [x], depth, seg_logits
 
     def extract_feat(self, points, img_inputs, img_metas, **kwargs):
         """Extract features from images and points."""
@@ -119,9 +127,9 @@ class BEVDepth(BEVDet):
                 post_trans:  (B, N_views, 3)
                 bda_rot:  (B, 3, 3)
         """
-        img_feats, depth = self.extract_img_feat(img_inputs, img_metas, **kwargs)
+        img_feats, depth, seg_logits = self.extract_img_feat(img_inputs, img_metas, **kwargs)
         pts_feats = None
-        return img_feats, pts_feats, depth
+        return img_feats, pts_feats, depth, seg_logits
 
     def forward_train(self,
                       points=None,
@@ -162,7 +170,7 @@ class BEVDepth(BEVDet):
         Returns:
             dict: Losses of different branches.
         """
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, _ = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         gt_depth = kwargs['gt_depth']   # (B, N_views, img_H, img_W)
         loss_depth = self.img_view_transformer.get_depth_loss(gt_depth, depth)
@@ -232,7 +240,7 @@ class BEVDepth(BEVDet):
                              }
             }
         """
-        img_feats, _, _ = self.extract_feat(
+        img_feats, _, _, _ = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         bbox_list = [dict() for _ in range(len(img_metas))]
         bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
@@ -251,7 +259,7 @@ class BEVDepth(BEVDet):
                       img_metas=None,
                       img_inputs=None,
                       **kwargs):
-        img_feats, _, _ = self.extract_feat(
+        img_feats, _, _, _ = self.extract_feat(
             points, img=img_inputs, img_metas=img_metas, **kwargs)
         assert self.with_pts_bbox
         outs = self.pts_bbox_head(img_feats)

@@ -1,3 +1,28 @@
+# PriorOcc: Enhancing Occupancy Prediction with Explicit 2D Semantic Priors
+
+This repository is a fork of [FlashOCC](https://github.com/Yzichen/FlashOCC), enhanced with an explicit 2D semantic prior injection mechanism ("Scheme C").
+
+## Key Features
+
+- **SemanticInjector Module**: A lightweight plugin that injects 2D semantic priors into the BEV pipeline.
+  - Consists of a `SegHead` (for 2D segmentation supervision) and a `FusionLayer` (to merge semantic logits with image features).
+- **2D Semantic Supervision**: Adds an auxiliary 2D segmentation loss (`loss_2d_seg`) to guide the backbone representation.
+- **Pseudo-Label Generation**: Includes tools to generate 2D semantic pseudo-labels from pretrained segmentation models (e.g., SegFormer) for the nuScenes dataset.
+- **Integration**: Seamlessly integrated into the BEVDet/FlashOCC pipeline with configurable options.
+
+## New Tools & Docs
+
+- `tools/generate_2d_seg_labels.py`: Script to generate 2D semantic labels from nuScenes images.
+- `doc/generate_2d_seg_labels.md`: Documentation for generating and using 2D semantic labels.
+- `tools/integration_test.py`: End-to-end integration test script to verify tensor compatibility and pipeline integrity.
+- `projects/mmdet3d_plugin/models/model_utils/semantic_injector.py`: Implementation of the SemanticInjector module.
+
+## Usage
+
+See `doc/generate_2d_seg_labels.md` for instructions on how to prepare the 2D semantic data and train the model with the new features.
+
+---
+
 # FlashOcc: Fast and Memory-Efficient Occupancy Prediction via Channel-to-Height Plugin
 
 

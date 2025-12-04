@@ -60,6 +60,13 @@ model = dict(
         num_outs=1,
         start_level=0,
         out_ids=[0]),
+    semantic_injector=dict(
+        type='SemanticInjector',
+        in_channels=256,
+        out_channels=256,
+        num_classes=17,
+        norm_cfg=dict(type='BN'),
+    ),
     img_view_transformer=dict(
         type='LSSViewTransformer',
         grid_config=grid_config,
@@ -126,10 +133,15 @@ train_pipeline = [
         use_dim=5,
         file_client_args=file_client_args),
     dict(type='PointToMultiViewDepth', downsample=1, grid_config=grid_config),
+    # 加载 2D 语义伪标签（SemanticInjector 辅助监督）
+    dict(type='LoadSemanticSeg2D',
+         seg_prefix=data_root + 'seg_2d_labels',
+         num_classes=17,
+         ignore_index=255),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(
         type='Collect3D', keys=['img_inputs', 'gt_depth', 'voxel_semantics',
-                                'mask_lidar', 'mask_camera'])
+                                'mask_lidar', 'mask_camera', 'gt_semantic_2d'])
 ]
 
 test_pipeline = [

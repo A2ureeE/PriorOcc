@@ -11,12 +11,13 @@ from mmdet3d.models import builder
 @DETECTORS.register_module()
 class BEVDet(CenterPoint):
     def __init__(self, img_backbone, img_neck, img_view_transformer, img_bev_encoder_backbone, img_bev_encoder_neck,
-                 pts_bbox_head=None, **kwargs):
+                 pts_bbox_head=None, semantic_injector=None, **kwargs):
         super(BEVDet, self).__init__(img_backbone=img_backbone, img_neck=img_neck, pts_bbox_head=pts_bbox_head,
                                      **kwargs)
         self.img_view_transformer = builder.build_neck(img_view_transformer)
         self.img_bev_encoder_backbone = builder.build_backbone(img_bev_encoder_backbone)
         self.img_bev_encoder_neck = builder.build_neck(img_bev_encoder_neck)
+        self.semantic_injector = builder.build_neck(semantic_injector) if semantic_injector else None
 
     def image_encoder(self, img, stereo=False):
         """
@@ -93,11 +94,19 @@ class BEVDet(CenterPoint):
         """
         img_inputs = self.prepare_inputs(img_inputs)
         x, _ = self.image_encoder(img_inputs[0])    # x: (B, N, C, fH, fW)
+        
+        seg_logits = None
+        if self.semantic_injector is not None:
+            B, N, C, fH, fW = x.shape
+            x = x.view(B * N, C, fH, fW)
+            x, seg_logits = self.semantic_injector(x)
+            x = x.view(B, N, -1, fH, fW)
+
         x, depth = self.img_view_transformer([x] + img_inputs[1:7])
         # x: (B, C, Dy, Dx)
         # depth: (B*N, D, fH, fW)
         x = self.bev_encoder(x)
-        return [x], depth
+        return [x], depth, seg_logits
 
     def extract_feat(self, points, img_inputs, img_metas, **kwargs):
         """Extract features from images and points."""
@@ -113,9 +122,9 @@ class BEVDet(CenterPoint):
                 post_trans:  (B, N_views, 3)
                 bda_rot:  (B, 3, 3)
         """
-        img_feats, depth = self.extract_img_feat(img_inputs, img_metas, **kwargs)
+        img_feats, depth, seg_logits = self.extract_img_feat(img_inputs, img_metas, **kwargs)
         pts_feats = None
-        return img_feats, pts_feats, depth
+        return img_feats, pts_feats, depth, seg_logits
 
     def forward_train(self,
                       points=None,
@@ -156,7 +165,7 @@ class BEVDet(CenterPoint):
         Returns:
             dict: Losses of different branches.
         """
-        img_feats, pts_feats, _ = self.extract_feat(
+        img_feats, pts_feats, _, _ = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         losses = dict()
         losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
@@ -224,7 +233,7 @@ class BEVDet(CenterPoint):
                              }
             }
         """
-        img_feats, _, _ = self.extract_feat(
+        img_feats, _, _, _ = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         bbox_list = [dict() for _ in range(len(img_metas))]
         bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
@@ -243,7 +252,7 @@ class BEVDet(CenterPoint):
                       img_metas=None,
                       img_inputs=None,
                       **kwargs):
-        img_feats, _, _ = self.extract_feat(
+        img_feats, _, _, _ = self.extract_feat(
             points, img=img_inputs, img_metas=img_metas, **kwargs)
         assert self.with_pts_bbox
         outs = self.pts_bbox_head(img_feats)

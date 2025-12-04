@@ -11,7 +11,7 @@ from mmdet3d.core import bbox3d2result
 import numpy as np
 from multiprocessing.dummy import Pool as ThreadPool
 from ...ops import nearest_assign
-# pool = ThreadPool(processes=4)  # ´´½¨Ïß³Ì³Ø
+# pool = ThreadPool(processes=4)  # ï¿½ï¿½ï¿½ï¿½ï¿½ß³Ì³ï¿½
 
 # for pano
 grid_config_occ = {
@@ -84,6 +84,28 @@ class BEVDetOCC(BEVDet):
         self.pts_bbox_head = None
         self.upsample = upsample
 
+    def loss_2d_seg(self, seg_logits, gt_semantic_2d):
+        """
+        Compute 2D semantic segmentation loss.
+        Args:
+            seg_logits: (B*N, num_classes, H, W)
+            gt_semantic_2d: (B, N, H, W) or (B*N, H, W) or None
+        Returns:
+            dict: loss_2d_seg
+        """
+        if gt_semantic_2d is None:
+            return dict(loss_2d_seg=seg_logits.sum() * 0.0)
+        
+        B_N, C, H, W = seg_logits.shape
+        if gt_semantic_2d.dim() == 4:
+            gt_semantic_2d = gt_semantic_2d.view(-1, gt_semantic_2d.shape[-2], gt_semantic_2d.shape[-1])
+        
+        if seg_logits.shape[-2:] != gt_semantic_2d.shape[-2:]:
+            seg_logits = F.interpolate(seg_logits, size=gt_semantic_2d.shape[-2:], mode='bilinear', align_corners=True)
+        
+        loss_seg = F.cross_entropy(seg_logits, gt_semantic_2d.long(), ignore_index=255)
+        return dict(loss_2d_seg=loss_seg)
+
     def forward_train(self,
                       points=None,
                       img_metas=None,
@@ -123,7 +145,7 @@ class BEVDetOCC(BEVDet):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         losses = dict()
@@ -137,6 +159,13 @@ class BEVDetOCC(BEVDet):
 
         loss_occ = self.forward_occ_train(occ_bev_feature, voxel_semantics, mask_camera)
         losses.update(loss_occ)
+
+        # 2D Semantic Segmentation Loss (optional)
+        if seg_logits is not None and 'gt_semantic_2d' in kwargs:
+            gt_semantic_2d = kwargs['gt_semantic_2d']
+            loss_2d_seg = self.loss_2d_seg(seg_logits, gt_semantic_2d)
+            losses.update(loss_2d_seg)
+
         return losses
 
     def forward_occ_train(self, img_feats, voxel_semantics, mask_camera):
@@ -200,7 +229,7 @@ class BEVDetOCC(BEVDet):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         occ_bev_feature = img_feats[0]
         if self.upsample:
@@ -260,7 +289,7 @@ class BEVDepthOCC(BEVDepth):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         losses = dict()
@@ -339,7 +368,7 @@ class BEVDepthOCC(BEVDepth):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         occ_bev_feature = img_feats[0]
         if self.upsample:
@@ -417,7 +446,7 @@ class BEVDepthPano(BEVDepthOCC):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         losses = dict()
@@ -616,7 +645,7 @@ class BEVDepth4DOCC(BEVDepth4D):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         gt_depth = kwargs['gt_depth']   # (B, N_views, img_H, img_W)
@@ -684,7 +713,7 @@ class BEVDepth4DOCC(BEVDepth4D):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         occ_bev_feature = img_feats[0]
         if self.upsample:
@@ -761,7 +790,7 @@ class BEVDepth4DPano(BEVDepth4DOCC):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         gt_depth = kwargs['gt_depth']   # (B, N_views, img_H, img_W)
@@ -939,7 +968,7 @@ class BEVStereo4DOCC(BEVStereo4D):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         gt_depth = kwargs['gt_depth']   # (B, N_views, img_H, img_W)
@@ -1007,7 +1036,7 @@ class BEVStereo4DOCC(BEVStereo4D):
         # img_feats: List[(B, C, Dz, Dy, Dx)/(B, C, Dy, Dx) , ]
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
-        img_feats, pts_feats, depth = self.extract_feat(
+        img_feats, pts_feats, depth, seg_logits = self.extract_feat(
             points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
         occ_bev_feature = img_feats[0]
         if self.upsample:
@@ -1387,7 +1416,7 @@ class BEVDepthPanoTRT(BEVDepthPano):
         
         # outs_inst_center = self.aux_centerness_head([occ_bev_feature])
         x = self.aux_centerness_head.shared_conv(occ_bev_feature)     # (B, C'=share_conv_channel, H, W)
-        # ÔËÐÐ²»Í¬task_head,
+        # ï¿½ï¿½ï¿½Ð²ï¿½Í¬task_head,
         outs_inst_center_reg = self.aux_centerness_head.task_heads[0].reg(x)
         outs.append(outs_inst_center_reg)
         outs_inst_center_height = self.aux_centerness_head.task_heads[0].height(x)
@@ -1440,7 +1469,7 @@ class BEVDepthPanoTRT(BEVDepthPano):
 
         # outs_inst_center = self.aux_centerness_head([occ_bev_feature])
         x = self.aux_centerness_head.shared_conv(occ_bev_feature)     # (B, C'=share_conv_channel, H, W)
-        # ÔËÐÐ²»Í¬task_head,
+        # ï¿½ï¿½ï¿½Ð²ï¿½Í¬task_head,
         outs_inst_center_reg = self.aux_centerness_head.task_heads[0].reg(x)
         outs.append(outs_inst_center_reg)
         outs_inst_center_height = self.aux_centerness_head.task_heads[0].height(x)
