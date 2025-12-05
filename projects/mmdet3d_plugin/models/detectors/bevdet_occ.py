@@ -78,11 +78,21 @@ class BEVDetOCC(BEVDet):
     def __init__(self,
                  occ_head=None,
                  upsample=False,
+                 use_language_self_gating=False,
+                 language_self_gating=None,
                  **kwargs):
         super(BEVDetOCC, self).__init__(**kwargs)
         self.occ_head = build_head(occ_head)
         self.pts_bbox_head = None
         self.upsample = upsample
+        # 可选集成 LanguageSelfGating
+        self.use_language_self_gating = use_language_self_gating
+        if self.use_language_self_gating and language_self_gating is not None:
+            # language_self_gating 是一个 dict 配置，用于构建模块
+            from ..model_utils import LanguageSelfGating
+            self.language_self_gating = LanguageSelfGating(**language_self_gating)
+        else:
+            self.language_self_gating = None
 
     def loss_2d_seg(self, seg_logits, gt_semantic_2d):
         """
@@ -176,6 +186,15 @@ class BEVDetOCC(BEVDet):
             mask_camera: (B, Dx, Dy, Dz)
         Returns:
         """
+        # 可选：在传入 occ_head 之前应用 LanguageSelfGating
+        if getattr(self, 'language_self_gating', None) is not None:
+            try:
+                gated_feats, gate_map = self.language_self_gating(img_feats)
+                img_feats = gated_feats
+            except Exception:
+                # 如果形状不匹配则忽略 LSG
+                pass
+
         outs = self.occ_head(img_feats)
         # assert voxel_semantics.min() >= 0 and voxel_semantics.max() <= 17
         loss_occ = self.occ_head.loss(

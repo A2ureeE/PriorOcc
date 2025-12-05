@@ -100,6 +100,18 @@ model = dict(
             loss_weight=1.0
         ),
     )
+    ,
+    # Language Self-Gating optional config
+    language_self_gating=dict(
+        use_language_self_gating=False,
+        language_self_gating=dict(
+            in_channels=256,
+            proj_channels=128,
+            num_anchors=6,
+            grid_D=16,
+            scale=1.0,
+        )
+    )
 )
 
 # Data

@@ -80,11 +80,23 @@ class LanguageSelfGating(nn.Module):
 
     def forward(self, x: torch.Tensor):
         """前向：
-        x: (B, C, D, H, W)
+        支持两种输入格式：
+          - 3D 体素：x (B, C, D, H, W)
+          - 2D BEV：x (B, C, H, W)（内部自动扩展为 D=1）
+
         返回 gated_x, gate_map
         """
-        assert x.dim() == 5, '输入应为 (B,C,D,H,W)'
-        B, C, D, H, W = x.shape
+        if x.dim() == 5:
+            B, C, D, H, W = x.shape
+            is_2d = False
+        elif x.dim() == 4:
+            # 2D 输入，扩展为 D=1
+            B, C, H, W = x.shape
+            D = 1
+            x = x.unsqueeze(2)  # (B, C, 1, H, W)
+            is_2d = True
+        else:
+            raise AssertionError('输入应为 (B,C,D,H,W) 或 (B,C,H,W)')
 
         # 如果 physical_bias 未提前设置，则在第一次 forward 时初始化
         if self.physical_bias is None:
@@ -122,6 +134,11 @@ class LanguageSelfGating(nn.Module):
 
         # 我们使用抑制形式：gated = x * (1 - gate)，当 gate 接近 1 时抑制显著
         gated = x * (1.0 - gate_expand)
+
+        # 如果原始输入是 2D，则恢复维度
+        if is_2d:
+            gated = gated.squeeze(2)  # (B, C, H, W)
+            gate_map = gate_map.squeeze(1) if gate_map.dim() == 4 else gate_map.squeeze(1)
 
         return gated, gate_map
 
