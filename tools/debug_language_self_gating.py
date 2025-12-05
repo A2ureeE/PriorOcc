@@ -5,6 +5,13 @@
     python tools/debug_language_self_gating.py
 """
 
+import os
+import sys
+
+# 添加项目根目录到 Python 路径
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
 import torch
 from projects.mmdet3d_plugin.models.model_utils.language_self_gating import LanguageSelfGating
 

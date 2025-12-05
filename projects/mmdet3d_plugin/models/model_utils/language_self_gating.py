@@ -122,8 +122,22 @@ class LanguageSelfGating(nn.Module):
         # 聚合锚点相似度（取最大或加权和）。这里使用最大以突出最相关锚点
         max_sim, _ = sim.max(dim=1)  # (B, D, H, W)
 
-        # 将 physical_bias 加入，physical_bias 形状 (D,) -> (1,D,1,1)
-        pb = self.physical_bias.view(1, D, 1, 1)
+        # 将 physical_bias 加入，需要根据当前 D 进行适配
+        pb = self.physical_bias  # (grid_D,) 或者动态初始化后的 (D,)
+        if pb.shape[0] != D:
+            # 如果 physical_bias 维度与当前 D 不匹配，使用插值或者取子集/扩展
+            if D == 1:
+                # 2D 输入情况，取 physical_bias 的均值作为单一偏置
+                pb = pb.mean().view(1)
+            else:
+                # 使用线性插值对齐到新的 D
+                pb = F.interpolate(
+                    pb.view(1, 1, -1),  # (1, 1, grid_D)
+                    size=D,
+                    mode='linear',
+                    align_corners=True
+                ).view(D)
+        pb = pb.view(1, D, 1, 1)
         gate_logits = self.scale * (max_sim + pb)
 
         # Sigmoid 得到门控值 0..1

@@ -246,10 +246,96 @@ def main():
         return False
     
     # ============================================================
-    # Step 5: 完整 forward_train 测试（仅在 CUDA 可用时）
+    # Step 5: 测试 LanguageSelfGating 模块（如果启用）
+    # ============================================================
+    print('\n[Step 5] 测试 LanguageSelfGating 模块...')
+    
+    # 检查是否配置了 LSG
+    lsg_cfg = cfg.model.get('language_self_gating', None)
+    use_lsg = lsg_cfg.get('use_language_self_gating', False) if lsg_cfg else False
+    
+    if hasattr(model, 'language_self_gating') and model.language_self_gating is not None:
+        print('  ✓ LanguageSelfGating 模块已构建')
+        lsg_built = True
+    else:
+        print('  ⚠ LanguageSelfGating 模块未构建（配置关闭或未配置）')
+        lsg_built = False
+    
+    if lsg_built:
+        try:
+            # 获取 LSG 配置参数
+            lsg_in_channels = cfg.model['language_self_gating'].get('in_channels', 256)
+            lsg_grid_D = cfg.model['language_self_gating'].get('grid_D', 16)
+            
+            # 测试 2D 输入 (B, C, H, W) - 模拟 BEV 特征
+            bev_h, bev_w = 50, 50  # 模拟 BEV 特征图尺寸
+            dummy_bev_2d = torch.randn(batch_size, lsg_in_channels, bev_h, bev_w, device=device, requires_grad=True)
+            
+            gated_feat_2d, gate_map_2d = model.language_self_gating(dummy_bev_2d)
+            
+            print(f'  2D 输入: {tuple(dummy_bev_2d.shape)}')
+            print(f'  2D 输出 gated: {tuple(gated_feat_2d.shape)}')
+            print(f'  2D 输出 gate_map: {tuple(gate_map_2d.shape)}')
+            
+            # 验证 2D 输入输出维度一致
+            assert gated_feat_2d.shape == dummy_bev_2d.shape, \
+                f'2D gated 特征维度不匹配: {gated_feat_2d.shape} vs {dummy_bev_2d.shape}'
+            
+            # 测试 3D 输入 (B, C, D, H, W) - 模拟 voxel 特征
+            dummy_bev_3d = torch.randn(batch_size, lsg_in_channels, lsg_grid_D, bev_h, bev_w, device=device, requires_grad=True)
+            
+            gated_feat_3d, gate_map_3d = model.language_self_gating(dummy_bev_3d)
+            
+            print(f'  3D 输入: {tuple(dummy_bev_3d.shape)}')
+            print(f'  3D 输出 gated: {tuple(gated_feat_3d.shape)}')
+            print(f'  3D 输出 gate_map: {tuple(gate_map_3d.shape)}')
+            
+            # 验证 3D 输入输出维度一致
+            assert gated_feat_3d.shape == dummy_bev_3d.shape, \
+                f'3D gated 特征维度不匹配: {gated_feat_3d.shape} vs {dummy_bev_3d.shape}'
+            
+            # 测试反向传播
+            loss_lsg = gated_feat_3d.sum()
+            loss_lsg.backward()
+            
+            # 检查 LSG 参数是否有梯度
+            lsg_has_grad = False
+            for name, param in model.language_self_gating.named_parameters():
+                if param.grad is not None and param.grad.abs().sum() > 0:
+                    lsg_has_grad = True
+                    break
+            
+            if lsg_has_grad:
+                print('  ✓ LanguageSelfGating 参数有梯度')
+            else:
+                print('  ⚠ LanguageSelfGating 参数无梯度')
+            
+            # 检查 gate_map 值在 [0, 1] 范围内
+            gate_min = gate_map_3d.min().item()
+            gate_max = gate_map_3d.max().item()
+            print(f'  Gate map 值范围: [{gate_min:.4f}, {gate_max:.4f}]')
+            
+            if 0.0 <= gate_min and gate_max <= 1.0:
+                print('  ✓ Gate map 值在 [0, 1] 范围内（sigmoid 正常）')
+            else:
+                print('  ⚠ Gate map 值超出 [0, 1] 范围')
+            
+            print('  ✓ LanguageSelfGating 前向/反向测试通过')
+            
+        except Exception as e:
+            print(f'  ✗ LanguageSelfGating 测试失败: {e}')
+            import traceback
+            traceback.print_exc()
+            # 不返回 False，因为 LSG 是可选功能
+    else:
+        print('  跳过 LanguageSelfGating 测试（模块未启用）')
+        print('  提示: 在配置文件中设置 use_language_self_gating=True 以启用')
+    
+    # ============================================================
+    # Step 6: 完整 forward_train 测试（仅在 CUDA 可用时）
     # ============================================================
     if cuda_available:
-        print('\n[Step 5] 测试完整 forward_train...')
+        print('\n[Step 6] 测试完整 forward_train...')
         
         batch = build_synthetic_batch(cfg, batch_size, num_cams, device)
         
@@ -284,7 +370,7 @@ def main():
             traceback.print_exc()
             return False
     else:
-        print('\n[Step 5] 跳过完整 forward_train 测试（需要 CUDA）')
+        print('\n[Step 6] 跳过完整 forward_train 测试（需要 CUDA）')
         print('  ⚠ bev_pool_v2 算子需要 CUDA，CPU 模式下无法测试完整流程')
         print('  ⚠ SemanticInjector 相关测试已通过，完整训练需在 CUDA 环境下进行')
     

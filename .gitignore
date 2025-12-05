@@ -10,7 +10,9 @@ nuscenes
 ckpt
 projects/build
 mmdetection3d
-*debug.py
+# *debug.py
+gate.md
+update.md
 launch.json
 ckpts
 mmdeploy

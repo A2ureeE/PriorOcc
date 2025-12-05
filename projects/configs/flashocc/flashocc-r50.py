@@ -99,19 +99,16 @@ model = dict(
             ignore_index=255,
             loss_weight=1.0
         ),
-    )
-    ,
-    # Language Self-Gating optional config
+    ),
+    # Language Self-Gating 配置
+    use_language_self_gating=False,  # 设为 True 启用 LSG 机制
     language_self_gating=dict(
-        use_language_self_gating=False,
-        language_self_gating=dict(
-            in_channels=256,
-            proj_channels=128,
-            num_anchors=6,
-            grid_D=16,
-            scale=1.0,
-        )
-    )
+        in_channels=256,
+        proj_channels=128,
+        num_anchors=6,
+        grid_D=16,
+        scale=1.0,
+    ),
 )
 
 # Data
