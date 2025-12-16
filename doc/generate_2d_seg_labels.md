@@ -163,5 +163,3 @@ A: 确保伪标签生成时使用相同的文件名结构，且 `LoadSemanticSeg
 A: `LoadSemanticSeg2D` 会自动根据 crop 参数进行裁剪，使用最近邻插值保持类别边界清晰。
 
 ---
-
-如需我帮你把生成的伪标签接入训练 pipeline（实现 `LoadSemanticSeg2D`），我可以继续实现并更新配置。 
