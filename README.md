@@ -29,7 +29,11 @@ PriorOcc requires 2D semantic segmentation labels for the nuScenes dataset. We p
 
 ```bash
 # Generate labels (saved to data/nuscenes/seg_2d_labels)
-python tools/generate_2d_seg_labels.py
+python tools/generate_2d_seg_labels.py \
+    --data-root data/nuscenes \
+    --output-dir data/nuscenes/seg_2d_labels \
+    --split trainval \
+    --device cuda:0
 ```
 
 For more details, see [doc/generate_2d_seg_labels.md](doc/generate_2d_seg_labels.md).
