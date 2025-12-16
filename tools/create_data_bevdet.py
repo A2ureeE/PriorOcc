@@ -134,11 +134,26 @@ def add_ann_adj_info(extra_tag):
 
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Create BEVDet info files')
+    parser.add_argument('--version', type=str, default='v1.0-trainval',
+                        choices=['v1.0-trainval', 'v1.0-mini', 'v1.0-test'],
+                        help='nuScenes dataset version')
+    parser.add_argument('--root-path', type=str, default='data/nuscenes',
+                        help='Path to nuScenes dataset')
+    parser.add_argument('--extra-tag', type=str, default='bevdetv2-nuscenes',
+                        help='Extra tag for output file names')
+    args = parser.parse_args()
+
     dataset = 'nuscenes'
-    version = 'v1.0'
-    train_version = f'{version}-trainval'
-    root_path = 'data/nuscenes'
-    extra_tag = 'bevdetv2-nuscenes'
+    root_path = args.root_path
+    extra_tag = args.extra_tag
+    train_version = args.version
+    
+    print(f'Creating info files for {train_version}...')
+    print(f'Root path: {root_path}')
+    print(f'Extra tag: {extra_tag}')
+    
     nuscenes_data_prep(
         root_path=root_path,
         info_prefix=extra_tag,
@@ -146,4 +161,48 @@ if __name__ == '__main__':
         max_sweeps=0)
 
     print('add_ann_infos')
-    add_ann_adj_info(extra_tag)
+    # 修改 add_ann_adj_info 以支持 mini
+    nuscenes_version = train_version
+    dataroot = root_path if root_path.endswith('/') else root_path + '/'
+    nuscenes = NuScenes(nuscenes_version, dataroot)
+    
+    # nuscenes_converter 无论 mini 还是 trainval 都生成 train/val 文件名
+    sets = ['train', 'val']
+    
+    for set_name in sets:
+        pkl_path = '%s/%s_infos_%s.pkl' % (dataroot, extra_tag, set_name)
+        print(f'Processing {pkl_path}...')
+        try:
+            dataset = pickle.load(open(pkl_path, 'rb'))
+        except FileNotFoundError:
+            print(f'  File not found, skipping: {pkl_path}')
+            continue
+            
+        for id in range(len(dataset['infos'])):
+            if id % 10 == 0:
+                print('%d/%d' % (id, len(dataset['infos'])))
+            info = dataset['infos'][id]
+            # get sweep adjacent frame info
+            sample = nuscenes.get('sample', info['token'])
+            ann_infos = list()
+            for ann in sample['anns']:
+                ann_info = nuscenes.get('sample_annotation', ann)
+                velocity = nuscenes.box_velocity(ann_info['token'])
+                if np.any(np.isnan(velocity)):
+                    velocity = np.zeros(3)
+                ann_info['velocity'] = velocity
+                ann_infos.append(ann_info)
+            dataset['infos'][id]['ann_infos'] = ann_infos
+            dataset['infos'][id]['ann_infos'] = get_gt(dataset['infos'][id])
+            dataset['infos'][id]['scene_token'] = sample['scene_token']
+
+            scene = nuscenes.get('scene', sample['scene_token'])
+            dataset['infos'][id]['scene_name'] = scene['name']
+            dataset['infos'][id]['occ_path'] = \
+                './data/nuscenes/gts/%s/%s' % (scene['name'], info['token'])
+        
+        with open(pkl_path, 'wb') as fid:
+            pickle.dump(dataset, fid)
+        print(f'  Saved: {pkl_path}')
+    
+    print('Done!')
