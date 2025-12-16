@@ -32,12 +32,8 @@ Backbone -> Neck -> SemanticInjector -> ViewTransformer -> C2H -> [LanguageSelfG
 python tools/debug_language_self_gating.py
 ```
 
-## 后续改进方向
+## 改进方向
 
 - 使用 CLIP 文本嵌入替换语义锚点，并对齐类别表。
 - 在门控计算中引入空间上下文（轻量卷积或 Transformer 局部互信息）。
 - 将 gate map 可视化为热力图，用于分析模块行为。
-
-## 联系
-
-如需我继续将该模块完整集成到 `BEVDetOCC` 的 forward 流程并添加配置，请回复“集成 LSG”，我会继续实施。
