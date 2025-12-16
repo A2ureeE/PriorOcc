@@ -44,11 +44,22 @@ class LoadSemanticSeg2D:
                  seg_prefix='data/nuscenes/seg_2d_labels',
                  num_classes=17,
                  ignore_index=255,
-                 to_float32=False):
+                 to_float32=False,
+                 target_size=(256, 704)):
+        """
+        Args:
+            seg_prefix (str): 伪标签文件的根目录路径。
+            num_classes (int): 语义类别数量。默认为 17（nuScenes）
+            ignore_index (int): 忽略像素的索引值。默认为 255
+            to_float32 (bool): 是否转换为 float32。默认为 False
+            target_size (tuple): 目标尺寸 (H, W)，与图像处理后尺寸一致。
+                                 默认 (256, 704) 对应 data_config['input_size']
+        """
         self.seg_prefix = seg_prefix
         self.num_classes = num_classes
         self.ignore_index = ignore_index
         self.to_float32 = to_float32
+        self.target_size = target_size  # (H, W)
         
         # nuScenes 相机名称（与 PrepareImageInputs 中顺序一致）
         self.cam_names = [
@@ -176,21 +187,23 @@ class LoadSemanticSeg2D:
         else:
             cam_names = self.cam_names
         
-        # 获取变换参数（如果存在）
-        # PrepareImageInputs 会存储这些参数
-        img_augs = results.get('img_augs', None)
-        
         for idx, cam_name in enumerate(cam_names):
             # 获取图像路径
-            if 'cams' in results:
+            # 支持多种数据结构：
+            # 1. results['cams'][cam_name] - 直接结构
+            # 2. results['curr']['cams'][cam_name] - nuScenes BEVDet 结构
+            # 3. results['img_filename'] - 文件名列表
+            if 'cams' in results and cam_name in results['cams']:
                 img_path = results['cams'][cam_name]['data_path']
+            elif 'curr' in results and 'cams' in results['curr'] and cam_name in results['curr']['cams']:
+                img_path = results['curr']['cams'][cam_name]['data_path']
             elif 'img_filename' in results:
                 img_paths = results['img_filename']
                 img_path = img_paths[idx] if isinstance(img_paths, list) else img_paths
             else:
                 # 无法获取路径，使用全 ignore
                 gt_semantic_2d.append(
-                    np.full((256, 704), self.ignore_index, dtype=np.uint8)
+                    np.full(self.target_size, self.ignore_index, dtype=np.uint8)
                 )
                 continue
             
@@ -198,14 +211,13 @@ class LoadSemanticSeg2D:
             seg_path = self._get_seg_path(img_path)
             seg_label = self._load_seg_label(seg_path)
             
-            # 应用几何变换（与图像保持一致）
-            if img_augs is not None and idx < len(img_augs):
-                aug = img_augs[idx]
-                seg_label = self._apply_transform(
-                    seg_label,
-                    resize_dims=aug.get('resize_dims'),
-                    crop=aug.get('crop'),
-                    flip=aug.get('flip', False)
+            # 直接 resize 到目标尺寸 (与处理后的图像尺寸一致)
+            # 使用 INTER_NEAREST 保持类别标签的离散性
+            if seg_label.shape != self.target_size:
+                seg_label = cv2.resize(
+                    seg_label, 
+                    (self.target_size[1], self.target_size[0]),  # cv2 uses (W, H)
+                    interpolation=cv2.INTER_NEAREST
                 )
             
             gt_semantic_2d.append(seg_label)

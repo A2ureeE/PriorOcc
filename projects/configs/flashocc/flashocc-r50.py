@@ -146,7 +146,8 @@ train_pipeline = [
     dict(type='LoadSemanticSeg2D',
          seg_prefix=data_root + 'seg_2d_labels',
          num_classes=17,
-         ignore_index=255),
+         ignore_index=255,
+         target_size=(256, 704)),  # 与 data_config['input_size'] 一致
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(
         type='Collect3D', keys=['img_inputs', 'gt_depth', 'voxel_semantics',
