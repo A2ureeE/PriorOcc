@@ -19,11 +19,13 @@ class SemanticInjector(nn.Module):
                  in_channels,
                  out_channels,
                  num_classes,
-                 norm_cfg=dict(type='BN')):
+                 norm_cfg=dict(type='BN'),
+                 loss_2d_seg=None):  # 添加 loss_2d_seg 参数
         super(SemanticInjector, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.num_classes = num_classes
+        self.loss_2d_seg = loss_2d_seg  # 保存 loss_2d_seg 配置
 
         # SegHead: Conv3x3 -> BN -> ReLU -> Conv1x1
         self.seg_head = nn.Sequential(
