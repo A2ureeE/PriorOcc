@@ -50,6 +50,9 @@ class LanguageSelfGating(nn.Module):
         num_anchors: int = 6,
         grid_D: Optional[int] = None,
         scale: float = 1.0,
+        aggregation: str = 'softmax',  # 'max', 'softmax', 'logsumexp'
+        agg_temperature: float = 0.1,  # softmax/logsumexp 温度
+        residual_ratio: float = 0.0,   # 残差保留比例，防止过度抑制
     ):
         super().__init__()
         if proj_channels is None:
@@ -58,7 +61,9 @@ class LanguageSelfGating(nn.Module):
         self.proj_channels = proj_channels
         self.num_anchors = num_anchors
         self.grid_D = grid_D
-        self.scale = scale
+        self.aggregation = aggregation
+        self.agg_temperature = agg_temperature
+        self.residual_ratio = residual_ratio
 
         # 1x1x1 投影，用于将原始特征投影到较低维空间便于相似度计算
         self.projector = nn.Conv3d(in_channels, proj_channels, kernel_size=1)
@@ -78,7 +83,8 @@ class LanguageSelfGating(nn.Module):
             self.physical_bias = None
 
         # 可学习缩放系数（标量），用于控制门控影响强度
-        self.gate_scale = nn.Parameter(torch.tensor(1.0))
+        # 使用传入的 scale 参数初始化
+        self.gate_scale = nn.Parameter(torch.tensor(scale, dtype=torch.float32))
 
     def forward(self, x: torch.Tensor):
         """前向：
@@ -120,8 +126,19 @@ class LanguageSelfGating(nn.Module):
         # proj_norm: (B, P, D, H, W) -> (B, D, H, W, P) for einsum convenience
         sim = torch.einsum('bpdhw,ap->badhw', proj_norm, anchors_norm)  # (B, A, D, H, W)
 
-        # 聚合锚点相似度（取最大或加权和）。这里使用最大以突出最相关锚点
-        max_sim, _ = sim.max(dim=1)  # (B, D, H, W)
+        # 聚合锚点相似度（多种策略可选）
+        if self.aggregation == 'max':
+            # 原始方式：只取最大，梯度稀疏
+            agg_sim, _ = sim.max(dim=1)  # (B, D, H, W)
+        elif self.aggregation == 'softmax':
+            # Softmax 加权：梯度更平滑，同时利用多类先验
+            weights = F.softmax(sim / self.agg_temperature, dim=1)  # (B, A, D, H, W)
+            agg_sim = (weights * sim).sum(dim=1)  # (B, D, H, W)
+        elif self.aggregation == 'logsumexp':
+            # LogSumExp：平滑的 max 近似
+            agg_sim = self.agg_temperature * torch.logsumexp(sim / self.agg_temperature, dim=1)
+        else:
+            raise ValueError(f'Unknown aggregation: {self.aggregation}')
 
         # 将 physical_bias 加入，需要根据当前 D 进行适配
         pb = self.physical_bias  # (grid_D,) 或者动态初始化后的 (D,)
@@ -140,7 +157,7 @@ class LanguageSelfGating(nn.Module):
                 ).view(D)
         pb = pb.view(1, D, 1, 1)
         # 减法：sim 高 + bias 低 → gate 大（保留）；sim 低 + bias 高 → gate 小（抑制）
-        gate_logits = self.gate_scale * (max_sim - pb)
+        gate_logits = self.gate_scale * (agg_sim - pb)
 
         # Sigmoid 得到门控值 0..1
         gate_map = torch.sigmoid(gate_logits)  # (B, D, H, W)
@@ -150,7 +167,8 @@ class LanguageSelfGating(nn.Module):
 
         # 保留形式：gate 大→保留特征，gate 小→抑制特征
         # 这样当语义匹配度高时保留，高空无匹配时（bias 大但 sim 小）被抑制
-        gated = x * gate_expand
+        # 残差连接：防止过度抑制，residual_ratio=0 时等价于原始门控
+        gated = x * gate_expand + x * self.residual_ratio
 
         # 如果原始输入是 2D，则恢复维度
         if is_2d:
