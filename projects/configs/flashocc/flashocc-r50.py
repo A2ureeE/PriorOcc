@@ -66,6 +66,12 @@ model = dict(
         out_channels=256,
         num_classes=17,
         norm_cfg=dict(type='BN'),
+        loss_2d_seg=dict( 
+            type='CrossEntropyLoss',
+            use_sigmoid=False,
+            ignore_index=255,
+            loss_weight=0.2, # <--- 设为 0.2，让它只做辅助，不喧宾夺主
+        ),
     ),
     img_view_transformer=dict(
         type='LSSViewTransformer',
@@ -97,7 +103,7 @@ model = dict(
             type='CrossEntropyLoss',
             use_sigmoid=False,
             ignore_index=255,
-            loss_weight=0.2
+            loss_weight=1
         ),
     ),
     # Language Self-Gating 配置
