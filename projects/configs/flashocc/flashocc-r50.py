@@ -97,7 +97,7 @@ model = dict(
             type='CrossEntropyLoss',
             use_sigmoid=False,
             ignore_index=255,
-            loss_weight=1.0
+            loss_weight=0.2
         ),
     ),
     # Language Self-Gating 配置

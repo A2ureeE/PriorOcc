@@ -358,7 +358,7 @@ class LoadAnnotationsBEVDepth(object):
 
     def __call__(self, results):
         gt_boxes, gt_labels = results['ann_infos']      # (N_gt, 9),  (N_gt, )
-        gt_boxes, gt_labels = torch.Tensor(gt_boxes), torch.tensor(gt_labels)
+        gt_boxes, gt_labels = torch.tensor(np.array(gt_boxes), dtype=torch.float32), torch.tensor(np.array(gt_labels), dtype=torch.long)
         rotate_bda, scale_bda, flip_dx, flip_dy = self.sample_bda_augmentation()
 
         bda_mat = torch.zeros(4, 4)
