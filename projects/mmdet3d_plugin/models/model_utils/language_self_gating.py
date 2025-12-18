@@ -67,10 +67,12 @@ class LanguageSelfGating(nn.Module):
         # 形状 (num_anchors, proj_channels)
         self.anchors = nn.Parameter(torch.randn(num_anchors, proj_channels) * 0.1)
 
-        # 物理偏置：针对高度 D 的可学习偏置，如果 grid_D 未知则在 forward 中动态广播
+        # 物理偏置：针对高度 D 的可学习偏置
+        # 初始化为按高度递增：底层=0（保留），顶层=1（倾向抑制高空噪声）
         if grid_D is not None:
-            # (D,)
-            self.register_parameter('physical_bias', nn.Parameter(torch.zeros(grid_D)))
+            # (D,) 线性递增：[0, 0.07, 0.13, ..., 1.0]
+            init_bias = torch.arange(grid_D, dtype=torch.float32) / max(1.0, grid_D - 1)
+            self.register_parameter('physical_bias', nn.Parameter(init_bias))
         else:
             # 延迟创建为 buffer/parameter 在 forward
             self.physical_bias = None
@@ -100,9 +102,8 @@ class LanguageSelfGating(nn.Module):
 
         # 如果 physical_bias 未提前设置，则在第一次 forward 时初始化
         if self.physical_bias is None:
-            # 初始化为与高度成反比的偏置（较低高度通常更可能为地面语义）
-            # 这里使用缓慢递减初始化示例：bias[z] = -z / D
-            bias = -torch.arange(D, dtype=torch.float32, device=x.device) / max(1.0, D - 1)
+            # 初始化为按高度递增：底层=0（保留），顶层=1（倾向抑制高空噪声）
+            bias = torch.arange(D, dtype=torch.float32, device=x.device) / max(1.0, D - 1)
             self.register_parameter('physical_bias', nn.Parameter(bias))
 
         # 投影
@@ -138,7 +139,8 @@ class LanguageSelfGating(nn.Module):
                     align_corners=True
                 ).view(D)
         pb = pb.view(1, D, 1, 1)
-        gate_logits = self.scale * (max_sim + pb)
+        # 减法：sim 高 + bias 低 → gate 大（保留）；sim 低 + bias 高 → gate 小（抑制）
+        gate_logits = self.gate_scale * (max_sim - pb)
 
         # Sigmoid 得到门控值 0..1
         gate_map = torch.sigmoid(gate_logits)  # (B, D, H, W)
@@ -146,8 +148,9 @@ class LanguageSelfGating(nn.Module):
         # 应用门控到原始特征（按位置抑制）
         gate_expand = gate_map.unsqueeze(1)  # (B,1,D,H,W)
 
-        # 我们使用抑制形式：gated = x * (1 - gate)，当 gate 接近 1 时抑制显著
-        gated = x * (1.0 - gate_expand)
+        # 保留形式：gate 大→保留特征，gate 小→抑制特征
+        # 这样当语义匹配度高时保留，高空无匹配时（bias 大但 sim 小）被抑制
+        gated = x * gate_expand
 
         # 如果原始输入是 2D，则恢复维度
         if is_2d:

@@ -62,4 +62,5 @@ log_config = dict(
     interval=10,  # 每 10 个 iter 打印一次日志
     hooks=[
         dict(type='TextLoggerHook'),
+        dict(type='TensorboardLoggerHook'),
     ])

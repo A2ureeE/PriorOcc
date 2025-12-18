@@ -7,8 +7,6 @@
 - 支持多相机视角（nuScenes 6 个相机）
 - 与图像预处理同步进行 resize/crop/flip 变换
 - 输出 gt_semantic_2d 供 SemanticInjector 训练使用
-
-中文注释已添加以便理解每一步。
 """
 
 import os.path as osp
