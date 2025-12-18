@@ -68,7 +68,7 @@ def parse_args():
                         help='Device for inference (cuda:0 or cpu)')
     parser.add_argument('--skip-existing', action='store_true', default=True,
                         help='Skip already generated labels')
-    parser.add_argument('--batch-size', type=int, default=16,
+    parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for inference (4090 can use 16-32)')
     parser.add_argument('--num-workers', type=int, default=8,
                         help='Number of workers for data loading')
@@ -271,16 +271,26 @@ def main():
         
         def load_one(idx, path):
             try:
-                img = Image.open(path).convert('RGB')
-                images[idx] = img
-                sizes[idx] = img.size
+                # 使用 cv2 解码更快（比 PIL 快 2-3x）
+                img_bgr = cv2.imread(path)
+                if img_bgr is not None:
+                    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                    from PIL import Image
+                    img = Image.fromarray(img_rgb)
+                    images[idx] = img
+                    sizes[idx] = (img_bgr.shape[1], img_bgr.shape[0])  # (W, H)
+                else:
+                    images[idx] = None
+                    sizes[idx] = None
             except Exception as e:
                 images[idx] = None
                 sizes[idx] = None
         
         with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-            for idx, path in enumerate(paths):
-                executor.submit(load_one, idx, path)
+            futures = [executor.submit(load_one, idx, path) for idx, path in enumerate(paths)]
+            # 等待所有完成
+            for f in futures:
+                f.result()
         
         return images, sizes
     
@@ -319,8 +329,8 @@ def main():
 
     pbar = tqdm(total=len(tasks), desc='Processing')
     
-    # 预取第一个 batch
-    prefetch_queue = Queue(maxsize=2)
+    # 预取队列：增大到 4，让 CPU 有更多缓冲时间
+    prefetch_queue = Queue(maxsize=4)
     
     def prefetch_worker():
         for i in range(0, len(tasks), batch_size):
