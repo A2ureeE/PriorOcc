@@ -27,6 +27,12 @@ class SemanticInjector(nn.Module):
         self.num_classes = num_classes
         self.loss_2d_seg = loss_2d_seg  # 保存 loss_2d_seg 配置
 
+        # 打印 loss_weight 的值
+        if self.loss_2d_seg is not None and 'loss_weight' in self.loss_2d_seg:
+            print(f"SemanticInjector: loss_weight = {self.loss_2d_seg['loss_weight']}")
+        else:
+            print("SemanticInjector: loss_2d_seg is None or no loss_weight specified")
+
         # SegHead: Conv3x3 -> BN -> ReLU -> Conv1x1
         self.seg_head = nn.Sequential(
             build_conv_layer(

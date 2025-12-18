@@ -106,6 +106,13 @@ class BEVDetOCC(BEVDet):
         if gt_semantic_2d is None:
             return dict(loss_2d_seg=seg_logits.sum() * 0.0)
         
+        # Read loss weight from semantic_injector config (default 1.0)
+        loss_weight = 1.0
+        if getattr(self, 'semantic_injector', None) is not None:
+            cfg = getattr(self.semantic_injector, 'loss_2d_seg', None)
+            if isinstance(cfg, dict):
+                loss_weight = float(cfg.get('loss_weight', 1.0))
+        
         B_N, C, H, W = seg_logits.shape
         if gt_semantic_2d.dim() == 4:
             gt_semantic_2d = gt_semantic_2d.view(-1, gt_semantic_2d.shape[-2], gt_semantic_2d.shape[-1])
@@ -114,7 +121,7 @@ class BEVDetOCC(BEVDet):
             seg_logits = F.interpolate(seg_logits, size=gt_semantic_2d.shape[-2:], mode='bilinear', align_corners=True)
         
         loss_seg = F.cross_entropy(seg_logits, gt_semantic_2d.long(), ignore_index=255)
-        return dict(loss_2d_seg=loss_seg)
+        return dict(loss_2d_seg=loss_seg * loss_weight)
 
     def forward_train(self,
                       points=None,
