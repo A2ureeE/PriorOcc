@@ -52,7 +52,7 @@ class LanguageSelfGating(nn.Module):
         scale: float = 1.0,
         aggregation: str = 'softmax',  # 'max', 'softmax', 'logsumexp'
         agg_temperature: float = 0.1,  # softmax/logsumexp 温度
-        residual_ratio: float = 0.0,   # 残差保留比例，防止过度抑制
+        residual_ratio: float = 0.1,   # 残差保留比例，防止过度抑制
     ):
         super().__init__()
         if proj_channels is None:

@@ -12,7 +12,9 @@
         --data-root data/nuscenes \
         --output-dir data/nuscenes/seg_2d_labels \
         --split trainval \
-        --device cuda:0
+        --device cuda:0 \
+        --batch-size 16 \
+        --num-workers 8
 
 中文注释已添加以便理解每一步。
 """
@@ -23,6 +25,9 @@ import pickle
 from tqdm import tqdm
 import numpy as np
 import cv2
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+import threading
 
 
 # Cityscapes -> nuScenes 类别映射（近似映射）
@@ -63,6 +68,10 @@ def parse_args():
                         help='Device for inference (cuda:0 or cpu)')
     parser.add_argument('--skip-existing', action='store_true', default=True,
                         help='Skip already generated labels')
+    parser.add_argument('--batch-size', type=int, default=16,
+                        help='Batch size for inference (4090 can use 16-32)')
+    parser.add_argument('--num-workers', type=int, default=8,
+                        help='Number of workers for data loading')
     return parser.parse_args()
 
 
@@ -106,6 +115,36 @@ def inference_segformer(model, processor, image_path, device='cuda:0'):
     # Resize 回原始尺寸
     pred = cv2.resize(pred, (W, H), interpolation=cv2.INTER_NEAREST)
     return pred
+
+
+def inference_segformer_batch(model, processor, image_paths, device='cuda:0'):
+    """批量推理多张图像，返回 list of (H, W) predictions"""
+    from PIL import Image
+    import torch
+
+    images = []
+    sizes = []
+    for path in image_paths:
+        img = Image.open(path).convert('RGB')
+        sizes.append(img.size)  # (W, H)
+        images.append(img)
+
+    # 批量处理，pin_memory 加速传输
+    inputs = processor(images=images, return_tensors='pt', padding=True)
+    inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    logits = outputs.logits  # (B, num_classes, h, w)
+    preds = logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
+
+    # Resize 回各自原始尺寸
+    results = []
+    for i, (W, H) in enumerate(sizes):
+        pred = cv2.resize(preds[i], (W, H), interpolation=cv2.INTER_NEAREST)
+        results.append(pred)
+    return results
 
 
 def map_cityscapes_to_nuscenes(pred):
@@ -164,6 +203,8 @@ def main():
     print('开始 2D 语义伪标签生成')
     print('data root:', args.data_root)
     print('output dir:', args.output_dir)
+    print('batch size:', args.batch_size)
+    print('num workers:', args.num_workers)
 
     # 尝试构建模型，若失败提示用户安装依赖
     try:
@@ -185,54 +226,157 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    processed = 0
+    # 预处理：构建 (img_path_full, out_path) 列表，并过滤已存在的
+    tasks = []
     skipped = 0
-    failed = 0
-
-    for img_path in tqdm(image_list, desc='Processing'):
-        try:
-            # 规范化路径（若为相对 path）
-            if not osp.isabs(img_path):
-                # 一般 info 中存的是相对 data_root 的路径或绝对路径
-                candidate = osp.join(args.data_root, img_path)
-                if osp.exists(candidate):
-                    img_path_full = candidate
-                elif osp.exists(osp.join(args.data_root, 'samples', img_path)):
-                    img_path_full = osp.join(args.data_root, 'samples', img_path)
-                else:
-                    img_path_full = img_path
+    for img_path in image_list:
+        # 规范化路径
+        if not osp.isabs(img_path):
+            candidate = osp.join(args.data_root, img_path)
+            if osp.exists(candidate):
+                img_path_full = candidate
+            elif osp.exists(osp.join(args.data_root, 'samples', img_path)):
+                img_path_full = osp.join(args.data_root, 'samples', img_path)
             else:
                 img_path_full = img_path
+        else:
+            img_path_full = img_path
 
-            # 构建输出路径
-            # 例如: data/nuscenes/samples/CAM_FRONT/xxx.jpg -> output_dir/samples/CAM_FRONT/xxx.png
-            if img_path_full.startswith(args.data_root):
-                rel = osp.relpath(img_path_full, args.data_root)
-            else:
-                # 若是绝对路径且不在 data_root 下，直接使用文件名
-                rel = osp.basename(img_path_full)
+        # 构建输出路径
+        if img_path_full.startswith(args.data_root):
+            rel = osp.relpath(img_path_full, args.data_root)
+        else:
+            rel = osp.basename(img_path_full)
+        out_path = osp.join(args.output_dir, rel)
+        out_path = out_path.rsplit('.', 1)[0] + '.png'
 
-            out_path = osp.join(args.output_dir, rel)
-            out_path = out_path.rsplit('.', 1)[0] + '.png'
+        if args.skip_existing and osp.exists(out_path):
+            skipped += 1
+            continue
+        tasks.append((img_path_full, out_path))
 
-            if args.skip_existing and osp.exists(out_path):
-                skipped += 1
-                continue
+    print(f'总图片: {len(image_list)}, 待处理: {len(tasks)}, 已跳过: {skipped}')
 
-            os.makedirs(osp.dirname(out_path), exist_ok=True)
+    if len(tasks) == 0:
+        print('所有图片已处理完毕，无需重新生成')
+        return
 
-            pred = inference_segformer(model, processor, img_path_full, args.device)
-            mapped = map_cityscapes_to_nuscenes(pred)
-            cv2.imwrite(out_path, mapped)
-            processed += 1
+    # 异步预取：CPU 在后台加载图片，GPU 不用等
+    from PIL import Image
+    
+    def load_images_async(paths):
+        """多线程并行加载图片"""
+        images = [None] * len(paths)
+        sizes = [None] * len(paths)
+        
+        def load_one(idx, path):
+            try:
+                img = Image.open(path).convert('RGB')
+                images[idx] = img
+                sizes[idx] = img.size
+            except Exception as e:
+                images[idx] = None
+                sizes[idx] = None
+        
+        with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+            for idx, path in enumerate(paths):
+                executor.submit(load_one, idx, path)
+        
+        return images, sizes
+    
+    def inference_with_preloaded(model, processor, images, sizes, device):
+        """使用已加载的图片进行推理"""
+        import torch
+        
+        # 过滤掉加载失败的
+        valid_indices = [i for i, img in enumerate(images) if img is not None]
+        valid_images = [images[i] for i in valid_indices]
+        valid_sizes = [sizes[i] for i in valid_indices]
+        
+        if len(valid_images) == 0:
+            return [], valid_indices
+        
+        inputs = processor(images=valid_images, return_tensors='pt', padding=True)
+        inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
+        
+        with torch.no_grad():
+            outputs = model(**inputs)
+        
+        logits = outputs.logits
+        preds = logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
+        
+        results = []
+        for i, (W, H) in enumerate(valid_sizes):
+            pred = cv2.resize(preds[i], (W, H), interpolation=cv2.INTER_NEAREST)
+            results.append(pred)
+        
+        return results, valid_indices
+
+    # 批量处理 + 异步预取
+    processed = 0
+    failed = 0
+    batch_size = args.batch_size
+
+    pbar = tqdm(total=len(tasks), desc='Processing')
+    
+    # 预取第一个 batch
+    prefetch_queue = Queue(maxsize=2)
+    
+    def prefetch_worker():
+        for i in range(0, len(tasks), batch_size):
+            batch = tasks[i:i+batch_size]
+            img_paths = [t[0] for t in batch]
+            out_paths = [t[1] for t in batch]
+            images, sizes = load_images_async(img_paths)
+            prefetch_queue.put((batch, images, sizes, out_paths))
+        prefetch_queue.put(None)  # 结束信号
+    
+    prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
+    prefetch_thread.start()
+    
+    while True:
+        item = prefetch_queue.get()
+        if item is None:
+            break
+        
+        batch, images, sizes, out_paths = item
+        img_paths = [t[0] for t in batch]
+        
+        try:
+            # 确保输出目录存在
+            for out_path in out_paths:
+                os.makedirs(osp.dirname(out_path), exist_ok=True)
+
+            # 使用预加载的图片推理
+            preds, valid_indices = inference_with_preloaded(model, processor, images, sizes, args.device)
+
+            # 保存结果
+            for pred_idx, batch_idx in enumerate(valid_indices):
+                mapped = map_cityscapes_to_nuscenes(preds[pred_idx])
+                cv2.imwrite(out_paths[batch_idx], mapped)
+                processed += 1
+            
+            # 统计加载失败的
+            failed += len(batch) - len(valid_indices)
 
         except Exception as e:
-            failed += 1
-            if failed <= 5:
-                print('\n[Error] failed to process', img_path, e)
-            continue
+            # 批量失败时，回退到逐张处理
+            for img_path, out_path in zip(img_paths, out_paths):
+                try:
+                    os.makedirs(osp.dirname(out_path), exist_ok=True)
+                    pred = inference_segformer(model, processor, img_path, args.device)
+                    mapped = map_cityscapes_to_nuscenes(pred)
+                    cv2.imwrite(out_path, mapped)
+                    processed += 1
+                except Exception as e2:
+                    failed += 1
+                    if failed <= 5:
+                        print(f'\n[Error] failed to process {img_path}: {e2}')
 
-    print('Done. processed=%d skipped=%d failed=%d' % (processed, skipped, failed))
+        pbar.update(len(batch))
+
+    pbar.close()
+    print(f'Done. processed={processed} skipped={skipped} failed={failed}')
 
 
 if __name__ == '__main__':
