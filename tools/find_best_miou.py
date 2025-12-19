@@ -118,7 +118,8 @@ def main():
     print(f"Best mIoU:  {best['miou']:.4f}")
     print(f"Matched:    {best['match']}")
     print(f"Log file:   {best['log']}")
-    print(f"Checkpoint: {os.path.join(args.work_dir, f'epoch_{best['epoch']}_ema.pth')}")
+    ckpt_path = os.path.join(args.work_dir, f"epoch_{best['epoch']}_ema.pth")
+    print(f"Checkpoint: {ckpt_path}")
 
 
 if __name__ == '__main__':
