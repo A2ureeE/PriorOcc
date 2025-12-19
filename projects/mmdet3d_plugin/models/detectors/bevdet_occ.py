@@ -221,7 +221,7 @@ class BEVDetOCC(BEVDet):
         # pts_feats: None
         # depth: (B*N_views, D, fH, fW)
         img_feats, _, _, *_ = self.extract_feat(
-             points, img=img, img_metas=img_metas, **kwargs)
+             points, img_inputs=img, img_metas=img_metas, **kwargs)
 
         occ_bev_feature = img_feats[0]
         if self.upsample:
