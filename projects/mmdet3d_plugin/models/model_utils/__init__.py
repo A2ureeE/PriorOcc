@@ -1,5 +1,5 @@
-from .depthnet import DepthNet
+from .depthnet import DepthNet, SemanticGatingModule
 from .semantic_injector import SemanticInjector
 from .language_self_gating import LanguageSelfGating
 
-__all__ = ['DepthNet', 'SemanticInjector', 'LanguageSelfGating']
+__all__ = ['DepthNet', 'SemanticInjector', 'LanguageSelfGating', 'SemanticGatingModule']

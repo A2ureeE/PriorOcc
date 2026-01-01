@@ -169,6 +169,82 @@ class SELayer(nn.Module):
         return x * self.gate(x_se)      # (B*N_views, C_mid, fH, fW)
 
 
+class SemanticGatingModule(nn.Module):
+    """
+    Semantic-Gated Depth Module (SGDM).
+    
+    Uses SE-Block style channel attention to gate image features based on 
+    semantic logits, explicitly guiding the ill-posed 2D-to-3D depth estimation.
+    
+    Mathematical formulation:
+        D(u,v) = Φ(F_img(u,v) ⊕ Gating(S_sem(u,v)))
+    
+    Args:
+        img_channels (int): Number of image feature channels.
+        sem_channels (int): Number of semantic classes (logits channels).
+        reduction (int): Channel reduction ratio for SE-block.
+    """
+    def __init__(self, img_channels, sem_channels, reduction=4):
+        super(SemanticGatingModule, self).__init__()
+        self.img_channels = img_channels
+        self.sem_channels = sem_channels
+        
+        # Semantic feature projection: project softmax(sem_logits) to img_channels
+        self.sem_proj = nn.Sequential(
+            nn.Conv2d(sem_channels, img_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(img_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # SE-Block style channel attention
+        mid_channels = max(img_channels // reduction, 16)
+        self.se_block = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(img_channels * 2, mid_channels, kernel_size=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, img_channels, kernel_size=1, bias=True),
+            nn.Sigmoid()
+        )
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, img_feat, sem_logits):
+        """
+        Args:
+            img_feat: (B*N, C_img, H, W) Image features from backbone
+            sem_logits: (B*N, C_sem, H, W) Semantic logits from SemanticInjector
+        
+        Returns:
+            gated_feat: (B*N, C_img, H, W) Semantically gated image features
+        """
+        # Apply softmax to semantic logits to get probability distribution
+        sem_prob = F.softmax(sem_logits, dim=1)  # (B*N, C_sem, H, W)
+        
+        # Project semantic features to image feature space
+        sem_feat = self.sem_proj(sem_prob)  # (B*N, C_img, H, W)
+        
+        # Concatenate for SE attention computation
+        combined = torch.cat([img_feat, sem_feat], dim=1)  # (B*N, 2*C_img, H, W)
+        
+        # SE-Block: compute channel attention weights
+        attn = self.se_block(combined)  # (B*N, C_img, 1, 1)
+        
+        # Apply gating: re-weight image features
+        gated_feat = img_feat * attn  # (B*N, C_img, H, W)
+        
+        return gated_feat
+
+
 class DepthNet(nn.Module):
     def __init__(self,
                  in_channels,
@@ -180,8 +256,19 @@ class DepthNet(nn.Module):
                  with_cp=False,
                  stereo=False,
                  bias=0.0,
-                 aspp_mid_channels=-1):
+                 aspp_mid_channels=-1,
+                 use_semantic_gating=False,
+                 sem_channels=17):
         super(DepthNet, self).__init__()
+        
+        # Semantic Gating Module (SGDM)
+        self.use_semantic_gating = use_semantic_gating
+        if use_semantic_gating:
+            self.semantic_gating = SemanticGatingModule(
+                img_channels=mid_channels,
+                sem_channels=sem_channels,
+                reduction=4
+            )
         self.reduce_conv = nn.Sequential(
             nn.Conv2d(
                 in_channels, mid_channels, kernel_size=3, stride=1, padding=1),
@@ -361,7 +448,7 @@ class DepthNet(nn.Module):
         return cost_volumn
     # ----------------------------------------- 用于建立cost volume --------------------------------------
 
-    def forward(self, x, mlp_input, stereo_metas=None):
+    def forward(self, x, mlp_input, stereo_metas=None, sem_logits=None):
         """
         Args:
             x: (B*N_views, C, fH, fW)
@@ -377,11 +464,23 @@ class DepthNet(nn.Module):
                 grid_config: self.img_view_transformer.grid_config,
                 cv_feat_list: [feat_prev_iv, stereo_feat]
             }
+            sem_logits: (B*N_views, C_sem, fH, fW) or None
+                Semantic logits from SemanticInjector for SGDM gating.
         Returns:
             x: (B*N_views, D+C_context, fH, fW)
         """
         mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1]))     # (B*N_views, 27)
         x = self.reduce_conv(x)     # (B*N_views, C_mid, fH, fW)
+        
+        # Apply Semantic Gating if enabled and sem_logits provided
+        if self.use_semantic_gating and sem_logits is not None:
+            # Interpolate sem_logits if size mismatch
+            if sem_logits.shape[-2:] != x.shape[-2:]:
+                sem_logits = F.interpolate(
+                    sem_logits, size=x.shape[-2:], 
+                    mode='bilinear', align_corners=True
+                )
+            x = self.semantic_gating(x, sem_logits)  # (B*N_views, C_mid, fH, fW)
 
         # (B*N_views, 27) --> (B*N_views, C_mid) --> (B*N_views, C_mid, 1, 1)
         context_se = self.context_mlp(mlp_input)[..., None, None]

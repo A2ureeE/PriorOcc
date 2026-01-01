@@ -96,7 +96,12 @@ class BEVDetOCC(BEVDet):
 
     def loss_2d_seg(self, seg_logits, gt_semantic_2d):
         """
-        Compute 2D semantic segmentation loss.
+        Compute 2D semantic segmentation loss with Focal Loss support.
+        
+        Focal Loss: FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+        - Automatically down-weights easy samples
+        - Focuses gradient on hard/misclassified pixels (boundaries, small objects)
+        
         Args:
             seg_logits: (B*N, num_classes, H, W)
             gt_semantic_2d: (B, N, H, W) or (B*N, H, W) or None
@@ -106,12 +111,24 @@ class BEVDetOCC(BEVDet):
         if gt_semantic_2d is None:
             return dict(loss_2d_seg=seg_logits.sum() * 0.0)
         
-        # Read loss weight from semantic_injector config (default 1.0)
+        # Read loss config from semantic_injector (default to CrossEntropy)
         loss_weight = 1.0
+        use_focal = False
+        gamma = 2.0
+        alpha = 0.25
+        ignore_index = 255
+        
         if getattr(self, 'semantic_injector', None) is not None:
             cfg = getattr(self.semantic_injector, 'loss_2d_seg', None)
             if isinstance(cfg, dict):
                 loss_weight = float(cfg.get('loss_weight', 1.0))
+                ignore_index = int(cfg.get('ignore_index', 255))
+                # Check if FocalLoss is specified
+                loss_type = cfg.get('type', 'CrossEntropyLoss')
+                if 'Focal' in loss_type:
+                    use_focal = True
+                    gamma = float(cfg.get('gamma', 2.0))
+                    alpha = float(cfg.get('alpha', 0.25))
         
         B_N, C, H, W = seg_logits.shape
         if gt_semantic_2d.dim() == 4:
@@ -120,7 +137,43 @@ class BEVDetOCC(BEVDet):
         if seg_logits.shape[-2:] != gt_semantic_2d.shape[-2:]:
             seg_logits = F.interpolate(seg_logits, size=gt_semantic_2d.shape[-2:], mode='bilinear', align_corners=True)
         
-        loss_seg = F.cross_entropy(seg_logits, gt_semantic_2d.long(), ignore_index=255)
+        if use_focal:
+            # Focal Loss implementation
+            # Step 1: Compute softmax probabilities
+            pred_softmax = F.softmax(seg_logits, dim=1)  # (B*N, C, H, W)
+            
+            # Step 2: Flatten for easier indexing
+            num_classes = seg_logits.shape[1]
+            seg_logits_flat = seg_logits.permute(0, 2, 3, 1).reshape(-1, num_classes)  # (B*N*H*W, C)
+            pred_softmax_flat = pred_softmax.permute(0, 2, 3, 1).reshape(-1, num_classes)  # (B*N*H*W, C)
+            gt_flat = gt_semantic_2d.reshape(-1)  # (B*N*H*W,)
+            
+            # Step 3: Create valid mask (ignore background/ignore_index)
+            valid_mask = gt_flat != ignore_index
+            
+            if valid_mask.sum() == 0:
+                return dict(loss_2d_seg=seg_logits.sum() * 0.0)
+            
+            gt_valid = gt_flat[valid_mask]
+            pred_softmax_valid = pred_softmax_flat[valid_mask]
+            seg_logits_valid = seg_logits_flat[valid_mask]
+            
+            # Step 4: Get probability of ground truth class: p_t
+            p_t = pred_softmax_valid.gather(1, gt_valid.unsqueeze(1)).squeeze(1)  # (N_valid,)
+            
+            # Step 5: Compute focal weight: (1 - p_t)^gamma
+            focal_weight = (1 - p_t) ** gamma  # (N_valid,)
+            
+            # Step 6: Compute cross entropy per pixel
+            ce_loss = F.cross_entropy(seg_logits_valid, gt_valid, reduction='none')  # (N_valid,)
+            
+            # Step 7: Apply focal weight and alpha
+            focal_loss = alpha * focal_weight * ce_loss
+            loss_seg = focal_loss.mean()
+        else:
+            # Standard CrossEntropyLoss
+            loss_seg = F.cross_entropy(seg_logits, gt_semantic_2d.long(), ignore_index=ignore_index)
+        
         return dict(loss_2d_seg=loss_seg * loss_weight)
 
     def forward_train(self,

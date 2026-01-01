@@ -66,22 +66,29 @@ model = dict(
         out_channels=256,
         num_classes=17,
         norm_cfg=dict(type='BN'),
-        loss_2d_seg=dict( 
-            type='CrossEntropyLoss',
-            use_sigmoid=False,
+        loss_2d_seg=dict(
+            type='FocalLoss',  # 替换为 Focal Loss 以聚焦困难样本
+            gamma=2.0,         # 聚焦参数
+            alpha=0.25,        # 类别平衡参数
             ignore_index=255,
-            loss_weight=0.2, # <--- 设为 0.2，让它只做辅助，不喧宾夺主
+            loss_weight=0.2,
         ),
     ),
     img_view_transformer=dict(
-        type='LSSViewTransformer',
+        type='LSSViewTransformerBEVDepth',  # 使用支持 SGDM 的版本
+        loss_depth_weight=3.0,
         grid_config=grid_config,
         input_size=data_config['input_size'],
         in_channels=256,
         out_channels=numC_Trans,
         sid=False,
         collapse_z=True,
-        downsample=16),
+        downsample=16,
+        depthnet_cfg=dict(
+            use_semantic_gating=True,   # 启用语义门控深度模块 (SGDM)
+            sem_channels=17,            # 语义类别数
+        ),
+    ),
     img_bev_encoder_backbone=dict(
         type='CustomResNet',
         numC_input=numC_Trans,
@@ -236,7 +243,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=200,
     warmup_ratio=0.001,
-    step=[24, ])
+    step=[16, 20])  # 在第16轮和20轮降低学习率
 runner = dict(type='EpochBasedRunner', max_epochs=24)
 
 custom_hooks = [
@@ -245,12 +252,26 @@ custom_hooks = [
         init_updates=10560,
         priority='NORMAL',
     ),
+    dict(
+        type='BestCheckpointHook',  # 基于 mIoU 保存最佳模型
+        save_file='best_miou.pth',
+        priority='LOW',
+    ),
+    dict(
+        type='LossCurveHook',  # 训练结束后保存 Loss 曲线图
+        plot_filename='loss_curve.png',
+        priority='VERY_LOW',
+    ),
+    dict(
+        type='MIoULoggerHook',  # 每轮验证后打印 mIoU
+        priority='LOW',
+    ),
 ]
 
 load_from = "ckpts/bevdet-r50-cbgs.pth"
 # fp16 = dict(loss_scale='dynamic')
-evaluation = dict(interval=1, start=20, pipeline=test_pipeline)
-checkpoint_config = dict(interval=1, max_keep_ckpts=5)
+evaluation = dict(interval=1, start=1, pipeline=test_pipeline)  # 从第1轮开始每轮验证
+checkpoint_config = dict(interval=1, max_keep_ckpts=10)  # 保留10个权重文件
 
 
 # with det pretrain; use_mask=True;

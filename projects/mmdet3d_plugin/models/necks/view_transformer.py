@@ -481,7 +481,7 @@ class LSSViewTransformerBEVDepth(LSSViewTransformer):
         mlp_input = torch.cat([mlp_input, sensor2ego], dim=-1)      # (B, N_views, 27)
         return mlp_input
 
-    def forward(self, input, stereo_metas=None):
+    def forward(self, input, stereo_metas=None, sem_logits=None):
         """
         Args:
             input (list(torch.tensor)):
@@ -504,6 +504,8 @@ class LSSViewTransformerBEVDepth(LSSViewTransformer):
                 grid_config: self.img_view_transformer.grid_config,
                 cv_feat_list: [feat_prev_iv, stereo_feat]
             }
+            sem_logits: (B*N_views, C_sem, fH, fW) or None
+                Semantic logits from SemanticInjector for SGDM gating.
         Returns:
             bev_feat: (B, C, Dy, Dx)
             depth: (B*N, D, fH, fW)
@@ -513,7 +515,7 @@ class LSSViewTransformerBEVDepth(LSSViewTransformer):
 
         B, N, C, H, W = x.shape
         x = x.view(B * N, C, H, W)      # (B*N_views, C, fH, fW)
-        x = self.depth_net(x, mlp_input, stereo_metas)      # (B*N_views, D+C_context, fH, fW)
+        x = self.depth_net(x, mlp_input, stereo_metas, sem_logits=sem_logits)  # (B*N_views, D+C_context, fH, fW)
         depth_digit = x[:, :self.D, ...]    # (B*N_views, D, fH, fW)
         tran_feat = x[:, self.D:self.D + self.out_channels, ...]    # (B*N_views, C_context, fH, fW)
         depth = depth_digit.softmax(dim=1)  # (B*N_views, D, fH, fW)

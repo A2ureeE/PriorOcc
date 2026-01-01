@@ -102,7 +102,17 @@ class BEVDet(CenterPoint):
             x, seg_logits = self.semantic_injector(x)
             x = x.view(B, N, -1, fH, fW)
 
-        x, depth = self.img_view_transformer([x] + img_inputs[1:7])
+        # Pass seg_logits to view transformer for SGDM if available
+        if hasattr(self.img_view_transformer, 'forward'):
+            # Check if view transformer supports sem_logits parameter
+            import inspect
+            sig = inspect.signature(self.img_view_transformer.forward)
+            if 'sem_logits' in sig.parameters:
+                x, depth = self.img_view_transformer([x] + img_inputs[1:7], sem_logits=seg_logits)
+            else:
+                x, depth = self.img_view_transformer([x] + img_inputs[1:7])
+        else:
+            x, depth = self.img_view_transformer([x] + img_inputs[1:7])
         # x: (B, C, Dy, Dx)
         # depth: (B*N, D, fH, fW)
         x = self.bev_encoder(x)
