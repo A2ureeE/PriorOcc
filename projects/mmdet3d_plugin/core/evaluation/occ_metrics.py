@@ -161,11 +161,10 @@ class Metric_mIoU():
 
         mean_mIoU = round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)
         print(f'===> mIoU of {self.cnt} samples: ' + str(mean_mIoU))
-        # print(f'===> sample-wise averaged mIoU of {cnt} samples: ' + str(round(np.nanmean(mIoU_avg), 2)))
 
+        # Only return scalar values for TensorBoard compatibility
         eval_res = dict()
-        eval_res['mIoU'] = float(mean_mIoU)  # Return scalar for TensorBoard compatibility
-        eval_res['per_class_iou'] = mIoU     # Keep per-class IoU for detailed analysis
+        eval_res['mIoU'] = float(mean_mIoU)
         return eval_res
 
 
