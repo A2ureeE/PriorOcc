@@ -239,8 +239,10 @@ class SemanticGatingModule(nn.Module):
         # SE-Block: compute channel attention weights
         attn = self.se_block(combined)  # (B*N, C_img, 1, 1)
         
-        # Apply gating: re-weight image features
-        gated_feat = img_feat * attn  # (B*N, C_img, H, W)
+        # Apply gating with residual connection:
+        # gated_feat = img_feat + img_feat * attn = img_feat * (1 + attn)
+        # This ensures original features are preserved even if semantic prediction is wrong
+        gated_feat = img_feat * (1.0 + attn)  # (B*N, C_img, H, W)
         
         return gated_feat
 
