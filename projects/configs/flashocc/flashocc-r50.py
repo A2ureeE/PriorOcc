@@ -67,9 +67,7 @@ model = dict(
         num_classes=17,
         norm_cfg=dict(type='BN'),
         loss_2d_seg=dict(
-            type='FocalLoss',  # 替换为 Focal Loss 以聚焦困难样本
-            gamma=2.0,         # 聚焦参数
-            alpha=0.25,        # 类别平衡参数
+            type='CrossEntropyLoss',  # 临时改回 CrossEntropy，Focal Loss 有数值问题
             ignore_index=255,
             loss_weight=0.3,
         ),
