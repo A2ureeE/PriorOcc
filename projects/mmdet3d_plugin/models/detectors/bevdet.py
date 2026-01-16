@@ -92,8 +92,9 @@ class BEVDet(CenterPoint):
             x: [(B, C', H', W'), ]
             depth: (B*N, D, fH, fW)
         """
-        img_inputs = self.prepare_inputs(img_inputs)
-        x, _ = self.image_encoder(img_inputs[0])    # x: (B, N, C, fH, fW)
+        imgs, sensor2keyegos, ego2globals, intrins, post_rots, post_trans, bda = \
+            self.prepare_inputs(img_inputs)
+        x, _ = self.image_encoder(imgs)    # x: (B, N, C, fH, fW)
         
         seg_logits = None
         if self.semantic_injector is not None:
@@ -102,17 +103,23 @@ class BEVDet(CenterPoint):
             x, seg_logits = self.semantic_injector(x)
             x = x.view(B, N, -1, fH, fW)
 
-        # Pass seg_logits to view transformer for SGDM if available
-        if hasattr(self.img_view_transformer, 'forward'):
-            # Check if view transformer supports sem_logits parameter
-            import inspect
-            sig = inspect.signature(self.img_view_transformer.forward)
-            if 'sem_logits' in sig.parameters:
-                x, depth = self.img_view_transformer([x] + img_inputs[1:7], sem_logits=seg_logits)
-            else:
-                x, depth = self.img_view_transformer([x] + img_inputs[1:7])
+        # Compute mlp_input for LSSViewTransformerBEVDepth
+        if hasattr(self.img_view_transformer, 'get_mlp_input'):
+            mlp_input = self.img_view_transformer.get_mlp_input(
+                sensor2keyegos, ego2globals, intrins, post_rots, post_trans, bda)
+            view_input = [x, sensor2keyegos, ego2globals, intrins, post_rots, 
+                          post_trans, bda, mlp_input]
         else:
-            x, depth = self.img_view_transformer([x] + img_inputs[1:7])
+            view_input = [x, sensor2keyegos, ego2globals, intrins, post_rots, 
+                          post_trans, bda]
+
+        # Pass seg_logits to view transformer for SGDM if available
+        import inspect
+        sig = inspect.signature(self.img_view_transformer.forward)
+        if 'sem_logits' in sig.parameters:
+            x, depth = self.img_view_transformer(view_input, sem_logits=seg_logits)
+        else:
+            x, depth = self.img_view_transformer(view_input)
         # x: (B, C, Dy, Dx)
         # depth: (B*N, D, fH, fW)
         x = self.bev_encoder(x)
