@@ -71,7 +71,7 @@ model = dict(
             gamma=2.0,         # 聚焦参数
             alpha=0.25,        # 类别平衡参数
             ignore_index=255,
-            loss_weight=0.2,
+            loss_weight=0.3,
         ),
     ),
     img_view_transformer=dict(
