@@ -68,7 +68,11 @@ class NuScenesDatasetOccpancy(NuScenesDataset):
         return input_dict
 
     def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-        metric = eval_kwargs['metric'][0]
+        # Handle missing metric parameter - default to mIoU
+        if 'metric' in eval_kwargs and eval_kwargs['metric']:
+            metric = eval_kwargs['metric'][0] if isinstance(eval_kwargs['metric'], list) else eval_kwargs['metric']
+        else:
+            metric = 'mIoU'  # Default metric
         print("metric = ", metric)
         if metric == 'ray-iou':
             occ_gts = []
