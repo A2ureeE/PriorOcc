@@ -138,7 +138,9 @@ class BEVDetOCC(BEVDet):
             seg_logits = F.interpolate(seg_logits, size=gt_semantic_2d.shape[-2:], mode='bilinear', align_corners=True)
         
         if use_focal:
-            # Focal Loss implementation
+            # Focal Loss implementation with numerical stability
+            eps = 1e-7  # Small epsilon to prevent log(0) and division by zero
+            
             # Step 1: Compute softmax probabilities
             pred_softmax = F.softmax(seg_logits, dim=1)  # (B*N, C, H, W)
             
@@ -149,27 +151,33 @@ class BEVDetOCC(BEVDet):
             gt_flat = gt_semantic_2d.reshape(-1)  # (B*N*H*W,)
             
             # Step 3: Create valid mask (ignore background/ignore_index)
-            valid_mask = gt_flat != ignore_index
+            valid_mask = (gt_flat != ignore_index) & (gt_flat >= 0) & (gt_flat < num_classes)
             
             if valid_mask.sum() == 0:
                 return dict(loss_2d_seg=seg_logits.sum() * 0.0)
             
-            gt_valid = gt_flat[valid_mask].long()  # Must be int64 for gather
+            gt_valid = gt_flat[valid_mask].long()
             pred_softmax_valid = pred_softmax_flat[valid_mask]
             seg_logits_valid = seg_logits_flat[valid_mask]
             
-            # Step 4: Get probability of ground truth class: p_t
+            # Step 4: Get probability of ground truth class: p_t (with clamping for stability)
             p_t = pred_softmax_valid.gather(1, gt_valid.unsqueeze(1)).squeeze(1)  # (N_valid,)
+            p_t = p_t.clamp(min=eps, max=1.0 - eps)  # Numerical stability
             
             # Step 5: Compute focal weight: (1 - p_t)^gamma
-            focal_weight = (1 - p_t) ** gamma  # (N_valid,)
+            focal_weight = (1.0 - p_t) ** gamma  # (N_valid,)
             
-            # Step 6: Compute cross entropy per pixel
-            ce_loss = F.cross_entropy(seg_logits_valid, gt_valid, reduction='none')  # (N_valid,)
+            # Step 6: Compute cross entropy per pixel (use log_softmax for stability)
+            log_p = F.log_softmax(seg_logits_valid, dim=1)
+            ce_loss = -log_p.gather(1, gt_valid.unsqueeze(1)).squeeze(1)  # (N_valid,)
             
             # Step 7: Apply focal weight and alpha
             focal_loss = alpha * focal_weight * ce_loss
             loss_seg = focal_loss.mean()
+            
+            # Check for NaN and fallback to CrossEntropy if needed
+            if torch.isnan(loss_seg) or torch.isinf(loss_seg):
+                loss_seg = F.cross_entropy(seg_logits, gt_semantic_2d.long(), ignore_index=ignore_index)
         else:
             # Standard CrossEntropyLoss
             loss_seg = F.cross_entropy(seg_logits, gt_semantic_2d.long(), ignore_index=ignore_index)
