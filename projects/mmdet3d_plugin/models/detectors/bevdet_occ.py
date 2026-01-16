@@ -154,7 +154,7 @@ class BEVDetOCC(BEVDet):
             if valid_mask.sum() == 0:
                 return dict(loss_2d_seg=seg_logits.sum() * 0.0)
             
-            gt_valid = gt_flat[valid_mask]
+            gt_valid = gt_flat[valid_mask].long()  # Must be int64 for gather
             pred_softmax_valid = pred_softmax_flat[valid_mask]
             seg_logits_valid = seg_logits_flat[valid_mask]
             
