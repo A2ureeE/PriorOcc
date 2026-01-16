@@ -159,13 +159,13 @@ class Metric_mIoU():
         for ind_class in range(self.num_classes-1):
             print(f'===> {self.class_names[ind_class]} - IoU = ' + str(round(mIoU[ind_class] * 100, 2)))
 
-        print(f'===> mIoU of {self.cnt} samples: ' + str(round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)))
+        mean_mIoU = round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)
+        print(f'===> mIoU of {self.cnt} samples: ' + str(mean_mIoU))
         # print(f'===> sample-wise averaged mIoU of {cnt} samples: ' + str(round(np.nanmean(mIoU_avg), 2)))
 
         eval_res = dict()
-        # eval_res['class_name'] = self.class_names
-        eval_res['mIoU'] = mIoU
-        # eval_res['cnt'] = self.cnt
+        eval_res['mIoU'] = float(mean_mIoU)  # Return scalar for TensorBoard compatibility
+        eval_res['per_class_iou'] = mIoU     # Keep per-class IoU for detailed analysis
         return eval_res
 
 
