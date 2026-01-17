@@ -241,7 +241,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=200,
     warmup_ratio=0.001,
-    step=[16, 20])  # 在第16轮和20轮降低学习率
+    step=[16])  # 只在第16轮降低学习率，后续保持 1e-5
 runner = dict(type='EpochBasedRunner', max_epochs=24)
 
 custom_hooks = [
