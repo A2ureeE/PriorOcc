@@ -88,7 +88,17 @@ class MEGVIIEMAHook(Hook):
         for bn_model, dist_group in zip(bn_model_list,
                                         bn_model_dist_group_list):
             bn_model.process_group = dist_group
-        runner.ema_model.updates = self.init_updates
+        
+        # 自动计算 updates：如果 init_updates < 0，则从 runner 的 epoch 和 iter 推算
+        if self.init_updates < 0:
+            # 使用 runner._epoch 和 runner._iter（如果存在）
+            current_epoch = getattr(runner, '_epoch', 0)
+            iters_per_epoch = len(runner.data_loader)
+            auto_updates = current_epoch * iters_per_epoch + getattr(runner, '_iter', 0)
+            runner.ema_model.updates = auto_updates
+            runner.logger.info(f'EMA auto-detected updates: {auto_updates} (epoch={current_epoch})')
+        else:
+            runner.ema_model.updates = self.init_updates
 
         if self.resume is not None:
             runner.logger.info(f'resume ema checkpoint from {self.resume}')

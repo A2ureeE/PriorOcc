@@ -245,11 +245,11 @@ lr_config = dict(
 runner = dict(type='EpochBasedRunner', max_epochs=24)
 
 custom_hooks = [
-    # dict(
-    #     type='MEGVIIEMAHook',
-    #     init_updates=10560,
-    #     priority='NORMAL',
-    # ),
+    dict(
+        type='MEGVIIEMAHook',
+        init_updates=-1,  # 自动从 epoch 推算（-1 表示自动）
+        priority='NORMAL',
+    ),
     dict(
         type='BestCheckpointHook',  # 基于 mIoU 保存最佳模型
         save_file='best_miou.pth',
