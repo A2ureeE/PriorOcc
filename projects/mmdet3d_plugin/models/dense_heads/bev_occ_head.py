@@ -66,8 +66,7 @@ class BEVOCCHead3D(BaseModule):
         self.use_mask = use_mask
         self.class_balance = class_balance
         if self.class_balance:
-            # 使用更温和的权重: 1/sqrt(log(freq))，平衡大小类别
-            class_weights = torch.from_numpy(1 / np.sqrt(np.log(nusc_class_frequencies[:num_classes] + 0.001)))
+            class_weights = torch.from_numpy(1 / np.log(nusc_class_frequencies[:num_classes] + 0.001))
             self.cls_weights = class_weights
             loss_occ['class_weight'] = class_weights
 
@@ -197,8 +196,7 @@ class BEVOCCHead2D(BaseModule):
 
         self.class_balance = class_balance
         if self.class_balance:
-            # 使用更温和的权重: 1/sqrt(log(freq))，平衡大小类别
-            class_weights = torch.from_numpy(1 / np.sqrt(np.log(nusc_class_frequencies[:num_classes] + 0.001)))
+            class_weights = torch.from_numpy(1 / np.log(nusc_class_frequencies[:num_classes] + 0.001))
             self.cls_weights = class_weights
             loss_occ['class_weight'] = class_weights        # ce loss
         self.loss_occ = build_loss(loss_occ)
@@ -332,8 +330,7 @@ class BEVOCCHead2D_V2(BaseModule):      # Use stronger loss setting
 
         self.class_balance = class_balance
         if self.class_balance:
-            # 使用更温和的权重: 1/sqrt(log(freq))，平衡大小类别
-            class_weights = torch.from_numpy(1 / np.sqrt(np.log(nusc_class_frequencies[:num_classes] + 0.001)))
+            class_weights = torch.from_numpy(1 / np.log(nusc_class_frequencies[:num_classes] + 0.001))
             self.cls_weights = class_weights
         self.loss_occ = build_loss(loss_occ)
 
