@@ -483,7 +483,8 @@ class DepthNet(nn.Module):
         x = self.reduce_conv(x)     # (B*N_views, C_mid, fH, fW)
         
         # Apply Semantic Gating if enabled and sem_logits provided
-        if self.use_semantic_gating and sem_logits is not None:
+        # 推理时跳过 SGDM 以提升帧率，只在训练时使用
+        if self.use_semantic_gating and sem_logits is not None and self.training:
             # Interpolate sem_logits if size mismatch
             if sem_logits.shape[-2:] != x.shape[-2:]:
                 sem_logits = F.interpolate(
