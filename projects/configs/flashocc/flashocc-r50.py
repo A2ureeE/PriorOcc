@@ -268,7 +268,7 @@ custom_hooks = [
 
 load_from = "ckpts/bevdet-r50-cbgs.pth"
 # fp16 = dict(loss_scale='dynamic')
-evaluation = dict(interval=2, start=1, pipeline=test_pipeline)  # 每2轮验证一次
+evaluation = dict(interval=2, start=2, pipeline=test_pipeline)  # 每2轮验证一次，从第2轮开始
 checkpoint_config = dict(interval=1, max_keep_ckpts=10)  # 保留10个权重文件
 
 
