@@ -245,11 +245,11 @@ lr_config = dict(
 runner = dict(type='EpochBasedRunner', max_epochs=24)
 
 custom_hooks = [
-    dict(
-        type='MEGVIIEMAHook',
-        init_updates=10560,
-        priority='NORMAL',
-    ),
+    # dict(
+    #     type='MEGVIIEMAHook',
+    #     init_updates=10560,
+    #     priority='NORMAL',
+    # ),
     dict(
         type='BestCheckpointHook',  # 基于 mIoU 保存最佳模型
         save_file='best_miou.pth',
@@ -268,7 +268,7 @@ custom_hooks = [
 
 load_from = "ckpts/bevdet-r50-cbgs.pth"
 # fp16 = dict(loss_scale='dynamic')
-evaluation = dict(interval=1, start=1, pipeline=test_pipeline)  # 每轮都验证
+evaluation = dict(interval=2, start=1, pipeline=test_pipeline)  # 每2轮验证一次
 checkpoint_config = dict(interval=1, max_keep_ckpts=10)  # 保留10个权重文件
 
 
