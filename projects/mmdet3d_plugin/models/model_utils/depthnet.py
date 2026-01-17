@@ -230,6 +230,13 @@ class SemanticGatingModule(nn.Module):
         # Apply softmax to semantic logits to get probability distribution
         sem_prob = F.softmax(sem_logits, dim=1)  # (B*N, C_sem, H, W)
         
+        # 软前景门控：计算前景类别的总概率
+        # 前景类别索引 0-10（car, truck, construction_vehicle, bus, trailer, 
+        #                     barrier, motorcycle, bicycle, pedestrian, traffic_cone, others）
+        # 背景类别索引 11-16（driveable_surface, other_flat, sidewalk, terrain, manmade, vegetation）
+        num_fg_classes = min(11, sem_prob.shape[1])  # 前景类别数
+        fg_prob = sem_prob[:, :num_fg_classes, :, :].sum(dim=1, keepdim=True)  # (B*N, 1, H, W)
+        
         # Project semantic features to image feature space
         sem_feat = self.sem_proj(sem_prob)  # (B*N, C_img, H, W)
         
@@ -239,10 +246,11 @@ class SemanticGatingModule(nn.Module):
         # SE-Block: compute channel attention weights
         attn = self.se_block(combined)  # (B*N, C_img, 1, 1)
         
-        # Apply gating with residual connection:
-        # gated_feat = img_feat + img_feat * attn = img_feat * (1 + attn)
-        # This ensures original features are preserved even if semantic prediction is wrong
-        gated_feat = img_feat * (1.0 + attn)  # (B*N, C_img, H, W)
+        # 软前景门控：前景概率加权门控强度
+        # fg_prob ≈ 1 (前景区域) → 强门控 img_feat * (1 + attn)
+        # fg_prob ≈ 0 (背景区域) → 弱门控 img_feat * 1
+        # fg_prob ≈ 0.5 (边界) → 平滑过渡
+        gated_feat = img_feat * (1.0 + fg_prob * attn)  # (B*N, C_img, H, W)
         
         return gated_feat
 
