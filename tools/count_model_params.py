@@ -104,34 +104,97 @@ def count_flops(model, cfg):
         return None, None
 
 
-def estimate_flops_manual(cfg):
-    """手动估算 FLOPs（基于典型配置）"""
+def estimate_flops_manual(model, cfg):
+    """手动估算 FLOPs（基于模型结构动态计算，只计算启用的模块）"""
     data_config = cfg.data_config if hasattr(cfg, 'data_config') else cfg.model.get('data_config', {})
     input_size = data_config.get('input_size', (256, 704))
     H, W = input_size
     N_views = 6
     
-    # ResNet50 backbone: ~4.1 GFLOPs per image at 224x224
-    # 按分辨率缩放
-    resnet50_base = 4.1e9  # at 224x224
+    total_flops = 0
+    flops_breakdown = {}
+    
+    # 1. Backbone (ResNet50): ~4.1 GFLOPs per image at 224x224，按分辨率缩放
+    resnet50_base = 4.1e9
     scale = (H * W) / (224 * 224)
     backbone_flops = resnet50_base * scale * N_views
+    flops_breakdown['img_backbone'] = backbone_flops
+    total_flops += backbone_flops
     
-    # FPN Neck: ~0.5 GFLOPs
+    # 2. Neck (FPN): ~0.5 GFLOPs per view
     neck_flops = 0.5e9 * N_views
+    flops_breakdown['img_neck'] = neck_flops
+    total_flops += neck_flops
     
-    # LSS View Transformer: ~2-3 GFLOPs
+    # 3. SemanticInjector (检查是否真正启用)
+    semantic_injector_enabled = (
+        hasattr(model, 'semantic_injector') and 
+        model.semantic_injector is not None and
+        sum(p.numel() for p in model.semantic_injector.parameters()) > 0
+    )
+    if semantic_injector_enabled:
+        # seg_head: Conv2d(256, 256, 3) + Conv2d(256, 17, 1)
+        # fusion_layer: Conv2d(273, 256, 1)
+        fH, fW = H // 16, W // 16  # 特征图尺寸
+        sem_flops = (
+            256 * 256 * 3 * 3 * fH * fW * N_views +  # seg_head conv1
+            256 * 17 * 1 * 1 * fH * fW * N_views +   # seg_head conv2
+            273 * 256 * 1 * 1 * fH * fW * N_views    # fusion_layer
+        ) * 2  # MAC to FLOPs
+        flops_breakdown['semantic_injector ✓'] = sem_flops
+        total_flops += sem_flops
+    
+    # 4. View Transformer (LSS): ~2-3 GFLOPs
     vt_flops = 2.5e9
     
-    # BEV Encoder: ~5 GFLOPs
+    # 检查是否有 SGDM (Semantic Gating) - 通过检查模型属性
+    sgdm_enabled = False
+    if hasattr(model, 'img_view_transformer'):
+        vt = model.img_view_transformer
+        if hasattr(vt, 'depthnet') and hasattr(vt.depthnet, 'use_semantic_gating'):
+            sgdm_enabled = vt.depthnet.use_semantic_gating
+            if sgdm_enabled:
+                fH, fW = H // 16, W // 16
+                sgdm_flops = (
+                    17 * 256 * 1 * 1 * fH * fW * N_views +  # sem_proj
+                    256 * 2 * 64 * fH * fW * N_views +      # SE-block
+                    256 * fH * fW * N_views                  # gating multiply
+                ) * 2
+                vt_flops += sgdm_flops
+                flops_breakdown['SGDM ✓'] = sgdm_flops
+    
+    flops_breakdown['img_view_transformer'] = vt_flops
+    total_flops += vt_flops
+    
+    # 5. BEV Encoder: ~5 GFLOPs
     bev_encoder_flops = 5e9
+    flops_breakdown['img_bev_encoder'] = bev_encoder_flops
+    total_flops += bev_encoder_flops
     
-    # OCC Head: ~1 GFLOPs
+    # 6. Language Self-Gating (检查是否真正启用)
+    # 通过配置和模型属性双重检查
+    lsg_enabled = (
+        hasattr(model, 'language_self_gating') and 
+        model.language_self_gating is not None and
+        cfg.model.get('use_language_self_gating', False) == True
+    )
+    if lsg_enabled:
+        # projector: Conv3d(256, 128, 1)
+        D, Hb, Wb = 16, 200, 200  # BEV 特征尺寸
+        lsg_flops = (
+            256 * 128 * 1 * 1 * 1 * D * Hb * Wb +  # projector
+            128 * 6 * D * Hb * Wb +                 # 相似度计算
+            D * Hb * Wb                             # sigmoid
+        ) * 2
+        flops_breakdown['language_self_gating ✓'] = lsg_flops
+        total_flops += lsg_flops
+    
+    # 7. OCC Head: ~1 GFLOPs
     occ_head_flops = 1e9
+    flops_breakdown['occ_head'] = occ_head_flops
+    total_flops += occ_head_flops
     
-    total_flops = backbone_flops + neck_flops + vt_flops + bev_encoder_flops + occ_head_flops
-    
-    return total_flops
+    return total_flops, flops_breakdown
 
 
 def main():
@@ -211,9 +274,16 @@ def main():
     if flops is not None:
         print(f"\n  Backbone FLOPs: {flops/1e9:.2f} GFLOPs")
     
-    # 手动估算总 FLOPs
-    estimated_flops = estimate_flops_manual(cfg)
-    print(f"  估算总 FLOPs:  {estimated_flops/1e9:.2f} GFLOPs (手动估算)")
+    # 手动估算总 FLOPs (传入 model)
+    estimated_flops, flops_breakdown = estimate_flops_manual(model, cfg)
+    
+    print(f"\n  各模块 FLOPs 分解:")
+    print("-" * 70)
+    for name, f in sorted(flops_breakdown.items(), key=lambda x: -x[1]):
+        pct = f / estimated_flops * 100 if estimated_flops > 0 else 0
+        print(f"    {name:<30} {f/1e9:>8.2f} GFLOPs  ({pct:>5.1f}%)")
+    
+    print(f"\n  估算总 FLOPs:  {estimated_flops/1e9:.2f} GFLOPs")
     
     print("\n" + "=" * 70)
     print("总结")
