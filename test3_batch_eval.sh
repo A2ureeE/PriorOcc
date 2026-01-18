@@ -22,12 +22,12 @@ EOF
 
 echo "=============================================="
 echo "批量测试脚本启动"
-echo "测试范围: 14*25=350轮"
+echo "测试范围: Epoch 14 - 25"
 echo "输出目录: ${OUTPUT_DIR}"
 echo "=============================================="
 
-# 遍历所有epoch checkpoint (1-350轮, 对应14*25)
-for epoch in $(seq 1 350); do
+# 遍历 epoch 14 到 25 的 checkpoint
+for epoch in $(seq 14 25); do
     CHECKPOINT="${CHECKPOINT_DIR}/epoch_${epoch}_ema.pth"
     
     # 检查checkpoint是否存在
@@ -102,7 +102,7 @@ echo "生成结果汇总..."
     echo "=============================================="
     echo ""
     
-    for epoch in $(seq 1 350); do
+    for epoch in $(seq 14 25); do
         RESULT_FILE="${OUTPUT_DIR}/epoch_${epoch}_results.txt"
         if [ -f "$RESULT_FILE" ]; then
             echo "=== Epoch ${epoch} ==="
