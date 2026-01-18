@@ -15,7 +15,7 @@ CONFIG="projects/configs/flashocc/flashocc-r50.py"
 # 创建启用fp16的临时配置文件（用于benchmark）
 CONFIG_FP16="work_dirs/test3/flashocc-r50-fp16.py"
 cat > $CONFIG_FP16 << 'EOF'
-_base_ = ['../../../projects/configs/flashocc/flashocc-r50.py']
+_base_ = ['../../projects/configs/flashocc/flashocc-r50.py']
 fp16 = dict(loss_scale=512.)
 EOF
 
