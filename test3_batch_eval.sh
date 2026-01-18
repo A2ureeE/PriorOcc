@@ -1,7 +1,6 @@
 #!/bin/bash
-# 批量测试脚本：测试14*25=350轮的mIoU和benchmark帧数
-# 每轮测试结果保存到单独的txt文件中
-# 使用fp16模式
+# 批量测试脚本：测试 epoch 14-25 的 mIoU 和 benchmark FPS
+# 只保存关键结果
 
 cd /root/learning/PriorOcc
 
@@ -34,82 +33,40 @@ for epoch in $(seq 14 25); do
     if [ -f "$CHECKPOINT" ]; then
         OUTPUT_FILE="${OUTPUT_DIR}/epoch_${epoch}_results.txt"
         
-        echo "=============================================="
         echo "Testing Epoch ${epoch}..."
-        echo "Checkpoint: ${CHECKPOINT}"
-        echo "Output: ${OUTPUT_FILE}"
-        echo "=============================================="
         
         # 创建输出文件头
         {
-            echo "=============================================="
             echo "Epoch ${epoch} 测试结果"
-            echo "=============================================="
-            echo "开始时间: $(date)"
-            echo "Checkpoint: ${CHECKPOINT}"
-            echo "Config: ${CONFIG}"
+            echo "时间: $(date)"
             echo ""
-            echo "========== mIoU 评估结果 =========="
+            echo "========== mIoU =========="
         } > $OUTPUT_FILE
         
-        # 运行测试：mIoU评估 (使用FP32保证精度)
+        # 运行mIoU测试，只提取关键结果
         PYTHONPATH=. python tools/test.py \
             $CONFIG \
             $CHECKPOINT \
             --eval mIoU \
-            2>&1 | tee -a $OUTPUT_FILE
+            2>&1 | grep -E "(per class IoU|IoU =|mIoU of|'mIoU')" >> $OUTPUT_FILE
         
         {
             echo ""
-            echo "========== Benchmark 性能测试 =========="
+            echo "========== Benchmark (FP16) =========="
         } >> $OUTPUT_FILE
         
-        # 运行benchmark测试 (使用fp16配置)
+        # 运行benchmark测试，只提取FPS结果
         PYTHONPATH=. python tools/analysis_tools/benchmark.py \
             $CONFIG_FP16 \
             $CHECKPOINT \
             --samples 200 \
             --log-interval 50 \
             --fuse-conv-bn \
-            2>&1 | tee -a $OUTPUT_FILE
+            2>&1 | grep -E "(fps:|Overall)" >> $OUTPUT_FILE
         
-        # 添加结束信息
-        {
-            echo ""
-            echo "=============================================="
-            echo "结束时间: $(date)"
-            echo "=============================================="
-        } >> $OUTPUT_FILE
-        
-        echo ""
-        echo "Epoch ${epoch} 测试完成！结果已保存到: ${OUTPUT_FILE}"
-        echo ""
+        echo "Epoch ${epoch} 完成 -> ${OUTPUT_FILE}"
     fi
 done
 
-echo "=============================================="
-echo "所有测试完成！"
-echo "结果保存在: ${OUTPUT_DIR}"
-echo "=============================================="
-
-# 汇总所有mIoU结果
-SUMMARY_FILE="${OUTPUT_DIR}/summary.txt"
-echo "生成结果汇总..."
-{
-    echo "=============================================="
-    echo "mIoU 结果汇总"
-    echo "生成时间: $(date)"
-    echo "=============================================="
-    echo ""
-    
-    for epoch in $(seq 14 25); do
-        RESULT_FILE="${OUTPUT_DIR}/epoch_${epoch}_results.txt"
-        if [ -f "$RESULT_FILE" ]; then
-            echo "=== Epoch ${epoch} ==="
-            grep -E "(mIoU|fps:|Overall)" $RESULT_FILE
-            echo ""
-        fi
-    done
-} > $SUMMARY_FILE
-
-echo "汇总结果已保存到: ${SUMMARY_FILE}"
+echo ""
+echo "所有测试完成！结果保存在: ${OUTPUT_DIR}"
