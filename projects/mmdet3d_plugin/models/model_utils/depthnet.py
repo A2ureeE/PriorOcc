@@ -277,7 +277,7 @@ class DepthNet(nn.Module):
             self.semantic_gating = SemanticGatingModule(
                 img_channels=mid_channels,
                 sem_channels=sem_channels,
-                reduction=8  # 增加 reduction 以减少计算量
+                reduction=4  # 与 checkpoint 保持一致 (mid_channels=256 / 4 = 64)
             )
         self.reduce_conv = nn.Sequential(
             nn.Conv2d(
