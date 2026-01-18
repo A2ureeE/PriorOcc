@@ -117,10 +117,11 @@ def main():
         start_time = time.perf_counter()
 
         with torch.no_grad():
-            model(return_loss=False, rescale=True, 
-                  w_pano=args.w_pano,
-                  w_panoproc=args.w_panoproc,
-                  **data)
+            with torch.cuda.amp.autocast(enabled=(fp16_cfg is not None)):
+                model(return_loss=False, rescale=True, 
+                      w_pano=args.w_pano,
+                      w_panoproc=args.w_panoproc,
+                      **data)
 
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - start_time
