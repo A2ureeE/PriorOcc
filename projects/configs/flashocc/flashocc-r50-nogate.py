@@ -66,28 +66,22 @@ model = dict(
         out_channels=256,
         num_classes=17,
         norm_cfg=dict(type='BN'),
-        loss_2d_seg=dict(
-            type='CrossEntropyLoss',  # 临时改回 CrossEntropy，Focal Loss 有数值问题
+        loss_2d_seg=dict( 
+            type='CrossEntropyLoss',
+            use_sigmoid=False,
             ignore_index=255,
-            loss_weight=0.3,
+            loss_weight=0.2, # <--- 设为 0.2，让它只做辅助，不喧宾夺主
         ),
     ),
     img_view_transformer=dict(
-        type='LSSViewTransformerBEVDepth',  # 使用支持 SGDM 的版本
-        loss_depth_weight=3.0,
+        type='LSSViewTransformer',
         grid_config=grid_config,
         input_size=data_config['input_size'],
         in_channels=256,
         out_channels=numC_Trans,
         sid=False,
         collapse_z=True,
-        downsample=16,
-        depthnet_cfg=dict(
-            use_semantic_gating=True,   # 启用语义门控深度模块 (SGDM)
-            sem_channels=17,            # 语义类别数
-            sgdm_reduction=4,           # SGDM SE-Block 压缩率 (正常版: 64 通道)
-        ),
-    ),
+        downsample=16),
     img_bev_encoder_backbone=dict(
         type='CustomResNet',
         numC_input=numC_Trans,
@@ -104,7 +98,7 @@ model = dict(
         use_mask=True,
         num_classes=18,
         use_predicter=True,
-        class_balance=True,  # 开启类别平衡，提升小目标 mIoU
+        class_balance=False,
         loss_occ=dict(
             type='CrossEntropyLoss',
             use_sigmoid=False,
@@ -242,35 +236,21 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=200,
     warmup_ratio=0.001,
-    step=[14])  # 在第14轮降低学习率
-runner = dict(type='EpochBasedRunner', max_epochs=30)  # 增加到 30 轮
+    step=[24, ])
+runner = dict(type='EpochBasedRunner', max_epochs=24)
 
 custom_hooks = [
     dict(
         type='MEGVIIEMAHook',
-        init_updates=-1,  # 自动从 epoch 推算（-1 表示自动）
+        init_updates=10560,
         priority='NORMAL',
-    ),
-    dict(
-        type='BestCheckpointHook',  # 基于 mIoU 保存最佳模型
-        save_file='best_miou.pth',
-        priority='LOW',
-    ),
-    dict(
-        type='LossCurveHook',  # 训练结束后保存 Loss 曲线图
-        plot_filename='loss_curve.png',
-        priority='VERY_LOW',
-    ),
-    dict(
-        type='MIoULoggerHook',  # 每轮验证后打印 mIoU
-        priority='LOW',
     ),
 ]
 
 load_from = "ckpts/bevdet-r50-cbgs.pth"
 # fp16 = dict(loss_scale='dynamic')
-evaluation = dict(interval=2, start=2, pipeline=test_pipeline)  # 每2轮验证一次，从第2轮开始
-checkpoint_config = dict(interval=1, max_keep_ckpts=5)  # 保留10个权重文件
+evaluation = dict(interval=1, start=20, pipeline=test_pipeline)
+checkpoint_config = dict(interval=1, max_keep_ckpts=5)
 
 
 # with det pretrain; use_mask=True;

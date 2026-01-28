@@ -85,7 +85,7 @@ model = dict(
         depthnet_cfg=dict(
             use_semantic_gating=True,   # 启用语义门控深度模块 (SGDM)
             sem_channels=17,            # 语义类别数
-            sgdm_reduction=4,           # SGDM SE-Block 压缩率 (正常版: 64 通道)
+            sgdm_reduction=8,           # SGDM SE-Block 压缩率 (轻量版: 32 通道, ~50%参数)
         ),
     ),
     img_bev_encoder_backbone=dict(
@@ -242,7 +242,7 @@ lr_config = dict(
     warmup='linear',
     warmup_iters=200,
     warmup_ratio=0.001,
-    step=[14])  # 在第14轮降低学习率
+    step=[16])  # 只在第16轮降低学习率，后续保持 1e-5
 runner = dict(type='EpochBasedRunner', max_epochs=30)  # 增加到 30 轮
 
 custom_hooks = [
