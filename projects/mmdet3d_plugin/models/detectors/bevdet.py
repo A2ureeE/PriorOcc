@@ -117,7 +117,15 @@ class BEVDet(CenterPoint):
         import inspect
         sig = inspect.signature(self.img_view_transformer.forward)
         if 'sem_logits' in sig.parameters:
-            x, depth = self.img_view_transformer(view_input, sem_logits=seg_logits)
+            view_result = self.img_view_transformer(view_input, sem_logits=seg_logits)
+            # 新版本返回三元组 (bev_feat, depth, refined_sem_logits)
+            if len(view_result) == 3:
+                x, depth, refined_sem_logits = view_result
+                # 如果有 refined_sem_logits，用它替换原始 seg_logits
+                if refined_sem_logits is not None:
+                    seg_logits = refined_sem_logits
+            else:
+                x, depth = view_result
         else:
             x, depth = self.img_view_transformer(view_input)
         # x: (B, C, Dy, Dx)

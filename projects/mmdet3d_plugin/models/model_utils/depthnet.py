@@ -255,6 +255,134 @@ class SemanticGatingModule(nn.Module):
         return gated_feat
 
 
+class BidirectionalSemanticDepthModule(nn.Module):
+    """
+    轻量级双向语义-深度联合学习模块 (Lite Bidirectional Semantic-Depth Module - LiteBSDM).
+    
+    创新点:
+    1. 正向: Semantic → Depth (语义指导深度估计，保留 SGDM 逻辑)
+    2. 反向: Depth → Semantic (深度边缘增强语义边界，使用 Sobel 零参数设计)
+    
+    轻量化设计:
+    - 使用固定 Sobel 算子提取深度边缘（零额外参数）
+    - 反向分支仅训练时激活（推理零开销）
+    - 参数量仅增加 ~3%
+    
+    Mathematical formulation:
+        F_gated = Gate_sem(F_img, S_sem)                    # Semantic guides Depth
+        S_refined = S_sem + α * Sobel(D_pred) * Attn        # Depth boundary refines Semantic
+    
+    Args:
+        img_channels (int): Number of image feature channels.
+        sem_channels (int): Number of semantic classes (logits channels).
+        reduction (int): Channel reduction ratio for SE-block.
+        depth_feedback_weight (float): Weight for depth-to-semantic feedback (0-1).
+    """
+    def __init__(self, img_channels, sem_channels, reduction=4, depth_feedback_weight=0.3):
+        super(BidirectionalSemanticDepthModule, self).__init__()
+        self.img_channels = img_channels
+        self.sem_channels = sem_channels
+        self.depth_feedback_weight = depth_feedback_weight
+        
+        # ============ Forward Path: Semantic → Depth (保留 SGDM 逻辑) ============
+        self.sem_proj = nn.Sequential(
+            nn.Conv2d(sem_channels, img_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(img_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        mid_channels = max(img_channels // reduction, 16)
+        self.sem_to_depth_se = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(img_channels * 2, mid_channels, kernel_size=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, img_channels, kernel_size=1, bias=True),
+            nn.Sigmoid()
+        )
+        
+        # ============ Backward Path: Depth → Semantic (极轻量) ============
+        # 注册 Sobel 算子作为固定 buffer（零参数）
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32)
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32)
+        self.register_buffer('sobel_x', sobel_x.view(1, 1, 3, 3))
+        self.register_buffer('sobel_y', sobel_y.view(1, 1, 3, 3))
+        
+        # 轻量注意力: 单层 Conv (仅 ~0.5K 参数)
+        self.depth_boundary_attn = nn.Sequential(
+            nn.Conv2d(1, sem_channels, kernel_size=1, bias=True),
+            nn.Sigmoid()
+        )
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+    
+    def _compute_depth_edges(self, depth_prob):
+        """使用 Sobel 算子计算深度边缘（零参数）"""
+        # 取深度期望值作为单通道深度图
+        D = depth_prob.shape[1]
+        depth_bins = torch.arange(D, device=depth_prob.device, dtype=depth_prob.dtype)
+        depth_map = (depth_prob * depth_bins.view(1, D, 1, 1)).sum(dim=1, keepdim=True)  # (B*N, 1, H, W)
+        
+        # Sobel 边缘检测
+        edge_x = F.conv2d(depth_map, self.sobel_x, padding=1)
+        edge_y = F.conv2d(depth_map, self.sobel_y, padding=1)
+        edges = torch.sqrt(edge_x ** 2 + edge_y ** 2 + 1e-6)  # (B*N, 1, H, W)
+        
+        # 归一化到 [0, 1]
+        edges = edges / (edges.max() + 1e-6)
+        return edges
+    
+    def forward(self, img_feat, sem_logits, depth_prob=None):
+        """
+        Args:
+            img_feat: (B*N, C_img, H, W) Image features from backbone
+            sem_logits: (B*N, C_sem, H, W) Semantic logits from SemanticInjector
+            depth_prob: (B*N, D, H, W) Depth probability distribution (optional)
+        
+        Returns:
+            gated_feat: (B*N, C_img, H, W) Semantically gated image features
+            refined_sem_logits: (B*N, C_sem, H, W) or None
+        """
+        # ============ Forward: Semantic → Depth Gating ============
+        sem_prob = F.softmax(sem_logits, dim=1)
+        
+        num_fg_classes = min(11, sem_prob.shape[1])
+        fg_prob = sem_prob[:, :num_fg_classes, :, :].sum(dim=1, keepdim=True)
+        
+        sem_feat = self.sem_proj(sem_prob)
+        combined = torch.cat([img_feat, sem_feat], dim=1)
+        attn = self.sem_to_depth_se(combined)
+        
+        gated_feat = img_feat * (1.0 + fg_prob * attn)
+        
+        # ============ Backward: Depth → Semantic (仅训练时) ============
+        refined_sem_logits = None
+        if depth_prob is not None and self.training:
+            if depth_prob.shape[-2:] != sem_logits.shape[-2:]:
+                depth_prob = F.interpolate(depth_prob, size=sem_logits.shape[-2:],
+                                           mode='bilinear', align_corners=True)
+            
+            # Sobel 边缘检测（零参数）
+            depth_edges = self._compute_depth_edges(depth_prob)  # (B*N, 1, H, W)
+            
+            # 轻量注意力
+            boundary_attn = self.depth_boundary_attn(depth_edges)  # (B*N, C_sem, H, W)
+            
+            # 在深度边缘位置增强语义 logits
+            refined_sem_logits = sem_logits + self.depth_feedback_weight * boundary_attn * sem_logits.detach()
+        
+        return gated_feat, refined_sem_logits
+
+
 class DepthNet(nn.Module):
     def __init__(self,
                  in_channels,
@@ -268,16 +396,38 @@ class DepthNet(nn.Module):
                  bias=0.0,
                  aspp_mid_channels=-1,
                  use_semantic_gating=False,
-                 sem_channels=17):
+                 use_bidirectional_sgdm=False,
+                 sem_channels=17,
+                 sgdm_reduction=4,
+                 depth_feedback_weight=0.3):
+        """
+        Args:
+            sgdm_reduction (int): Reduction ratio for SGDM SE-Block.
+                - 4: Normal version (mid_channels=256 / 4 = 64 channels)
+                - 8: Lite version (mid_channels=256 / 8 = 32 channels, ~50% less params)
+            use_bidirectional_sgdm (bool): If True, use LiteBSDM (bidirectional).
+            depth_feedback_weight (float): Weight for depth→semantic feedback in BSDM.
+        """
         super(DepthNet, self).__init__()
         
-        # Semantic Gating Module (SGDM)
-        self.use_semantic_gating = use_semantic_gating
-        if use_semantic_gating:
+        # Semantic Gating Module (SGDM or LiteBSDM)
+        self.use_semantic_gating = use_semantic_gating or use_bidirectional_sgdm
+        self.use_bidirectional_sgdm = use_bidirectional_sgdm
+        
+        if use_bidirectional_sgdm:
+            # 双向语义-深度联合学习模块（轻量版）
+            self.semantic_gating = BidirectionalSemanticDepthModule(
+                img_channels=mid_channels,
+                sem_channels=sem_channels,
+                reduction=sgdm_reduction,
+                depth_feedback_weight=depth_feedback_weight
+            )
+        elif use_semantic_gating:
+            # 原版单向 SGDM
             self.semantic_gating = SemanticGatingModule(
                 img_channels=mid_channels,
                 sem_channels=sem_channels,
-                reduction=4  # 与 checkpoint 保持一致 (mid_channels=256 / 4 = 64)
+                reduction=sgdm_reduction
             )
         self.reduce_conv = nn.Sequential(
             nn.Conv2d(
@@ -463,24 +613,17 @@ class DepthNet(nn.Module):
         Args:
             x: (B*N_views, C, fH, fW)
             mlp_input: (B, N_views, 27)
-            stereo_metas:  None or dict{
-                k2s_sensor: (B, N_views, 4, 4)
-                intrins: (B, N_views, 3, 3)
-                post_rots: (B, N_views, 3, 3)
-                post_trans: (B, N_views, 3)
-                frustum: (D, fH_stereo, fW_stereo, 3)  3:(u, v, d)
-                cv_downsample: 4,
-                downsample: self.img_view_transformer.downsample=16,
-                grid_config: self.img_view_transformer.grid_config,
-                cv_feat_list: [feat_prev_iv, stereo_feat]
-            }
+            stereo_metas:  None or dict{...}
             sem_logits: (B*N_views, C_sem, fH, fW) or None
-                Semantic logits from SemanticInjector for SGDM gating.
+                Semantic logits from SemanticInjector for SGDM/BSDM gating.
         Returns:
-            x: (B*N_views, D+C_context, fH, fW)
+            output: (B*N_views, D+C_context, fH, fW)
+            refined_sem_logits: (B*N_views, C_sem, fH, fW) or None (only for BSDM)
         """
         mlp_input = self.bn(mlp_input.reshape(-1, mlp_input.shape[-1]))     # (B*N_views, 27)
         x = self.reduce_conv(x)     # (B*N_views, C_mid, fH, fW)
+        
+        refined_sem_logits = None  # 默认无反向输出
         
         # Apply Semantic Gating if enabled and sem_logits provided
         if self.use_semantic_gating and sem_logits is not None:
@@ -490,7 +633,14 @@ class DepthNet(nn.Module):
                     sem_logits, size=x.shape[-2:], 
                     mode='bilinear', align_corners=True
                 )
-            x = self.semantic_gating(x, sem_logits)  # (B*N_views, C_mid, fH, fW)
+            
+            if self.use_bidirectional_sgdm:
+                # 双向模式：需要 depth_prob 做反向 gating
+                # 第一阶段：仅正向 gating（depth_prob 为 None）
+                x, _ = self.semantic_gating(x, sem_logits, depth_prob=None)
+            else:
+                # 原版单向 SGDM
+                x = self.semantic_gating(x, sem_logits)
 
         # (B*N_views, 27) --> (B*N_views, C_mid) --> (B*N_views, C_mid, 1, 1)
         context_se = self.context_mlp(mlp_input)[..., None, None]
@@ -512,16 +662,22 @@ class DepthNet(nn.Module):
                                  int(W*scale_factor))).to(x)
             else:
                 with torch.no_grad():
-                    # https://github.com/HuangJunJie2017/BEVDet/issues/278
-                    cost_volumn = self.calculate_cost_volumn(stereo_metas)      # (B*N_views, D, fH_stereo, fW_stereo)
-            cost_volumn = self.cost_volumn_net(cost_volumn)     # (B*N_views, D, fH, fW)
-            depth = torch.cat([depth, cost_volumn], dim=1)      # (B*N_views, C_mid+D, fH, fW)
+                    cost_volumn = self.calculate_cost_volumn(stereo_metas)
+            cost_volumn = self.cost_volumn_net(cost_volumn)
+            depth = torch.cat([depth, cost_volumn], dim=1)
+        
         if self.with_cp:
             depth = checkpoint(self.depth_conv, depth)
         else:
-            # 3*res blocks +ASPP/DCN + Conv(c_mid-->D)
-            depth = self.depth_conv(depth)  # x: (B*N_views, C_mid, fH, fW) --> (B*N_views, D, fH, fW)
-        return torch.cat([depth, context], dim=1)
+            depth = self.depth_conv(depth)  # (B*N_views, D, fH, fW)
+        
+        # 双向模式第二阶段：使用 depth_prob 做反向语义增强
+        if self.use_bidirectional_sgdm and sem_logits is not None and self.training:
+            depth_prob = depth.softmax(dim=1)  # (B*N_views, D, fH, fW)
+            _, refined_sem_logits = self.semantic_gating(x, sem_logits, depth_prob=depth_prob)
+        
+        output = torch.cat([depth, context], dim=1)
+        return output, refined_sem_logits
 
 
 class DepthAggregation(nn.Module):

@@ -485,42 +485,31 @@ class LSSViewTransformerBEVDepth(LSSViewTransformer):
         """
         Args:
             input (list(torch.tensor)):
-                imgs:  (B, N_views, 3, H, W)        # N_views = 6 * (N_history + 1)
-                sensor2egos: (B, N_views, 4, 4)
-                ego2globals: (B, N_views, 4, 4)
-                intrins:     (B, N_views, 3, 3)
-                post_rots:   (B, N_views, 3, 3)
-                post_trans:  (B, N_views, 3)
-                bda_rot:  (B, 3, 3)
-                mlp_input: (B, N_views, 27)
-            stereo_metas:  None or dict{
-                k2s_sensor: (B, N_views, 4, 4)
-                intrins: (B, N_views, 3, 3)
-                post_rots: (B, N_views, 3, 3)
-                post_trans: (B, N_views, 3)
-                frustum: (D, fH_stereo, fW_stereo, 3)  3:(u, v, d)
-                cv_downsample: 4,
-                downsample: self.img_view_transformer.downsample=16,
-                grid_config: self.img_view_transformer.grid_config,
-                cv_feat_list: [feat_prev_iv, stereo_feat]
-            }
+                imgs:  (B, N_views, 3, H, W)
+                sensor2egos, ego2globals, intrins, post_rots, post_trans, bda_rot, mlp_input
+            stereo_metas: None or dict{...}
             sem_logits: (B*N_views, C_sem, fH, fW) or None
-                Semantic logits from SemanticInjector for SGDM gating.
         Returns:
             bev_feat: (B, C, Dy, Dx)
             depth: (B*N, D, fH, fW)
+            refined_sem_logits: (B*N_views, C_sem, fH, fW) or None (only for BSDM)
         """
         (x, rots, trans, intrins, post_rots, post_trans, bda,
          mlp_input) = input[:8]
 
         B, N, C, H, W = x.shape
         x = x.view(B * N, C, H, W)      # (B*N_views, C, fH, fW)
-        x = self.depth_net(x, mlp_input, stereo_metas, sem_logits=sem_logits)  # (B*N_views, D+C_context, fH, fW)
-        depth_digit = x[:, :self.D, ...]    # (B*N_views, D, fH, fW)
-        tran_feat = x[:, self.D:self.D + self.out_channels, ...]    # (B*N_views, C_context, fH, fW)
+        
+        # DepthNet 现在返回 (output, refined_sem_logits)
+        depth_output, refined_sem_logits = self.depth_net(
+            x, mlp_input, stereo_metas, sem_logits=sem_logits)
+        
+        depth_digit = depth_output[:, :self.D, ...]    # (B*N_views, D, fH, fW)
+        tran_feat = depth_output[:, self.D:self.D + self.out_channels, ...]
         depth = depth_digit.softmax(dim=1)  # (B*N_views, D, fH, fW)
+        
         bev_feat, depth = self.view_transform(input, depth, tran_feat)
-        return bev_feat, depth
+        return bev_feat, depth, refined_sem_logits
 
     def get_downsampled_gt_depth(self, gt_depths):
         """
