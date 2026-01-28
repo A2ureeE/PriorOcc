@@ -84,8 +84,10 @@ model = dict(
         downsample=16,
         depthnet_cfg=dict(
             use_semantic_gating=True,   # 启用语义门控深度模块 (SGDM)
+            use_bidirectional_sgdm=False,  # 启用双向联合学习 (LiteBSDM)
             sem_channels=17,            # 语义类别数
-            sgdm_reduction=4,           # SGDM SE-Block 压缩率 (正常版: 64 通道)
+            sgdm_reduction=4,           # SE-Block 压缩率 (正常版: 64 通道)
+            depth_feedback_weight=0.3,  # 深度→语义反馈权重 (仅 BSDM)
         ),
     ),
     img_bev_encoder_backbone=dict(
