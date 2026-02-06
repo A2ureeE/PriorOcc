@@ -76,7 +76,8 @@ def create_voxel_mesh(points, labels, voxel_size):
     
     combined_mesh = o3d.geometry.TriangleMesh()
     
-    hx, hy, hz = voxel_size[0]/2 * 0.9, voxel_size[1]/2 * 0.9, voxel_size[2]/2 * 0.9
+    # Full voxel size (no gap)
+    hx, hy, hz = voxel_size[0]/2, voxel_size[1]/2, voxel_size[2]/2
     
     print(f"Creating {len(points)} voxel cubes...")
     
