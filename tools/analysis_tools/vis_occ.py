@@ -263,7 +263,7 @@ def headless_render_occ(pred_occ, voxel_show, voxel_size, canva_size=1000):
     colors = colormap_to_colors[labels][:, :3] / 255.0
     
     # Limit points for performance
-    max_points = 100000
+    max_points = 150000
     if len(points) > max_points:
         idx = np.random.choice(len(points), max_points, replace=False)
         points = points[idx]
@@ -273,9 +273,10 @@ def headless_render_occ(pred_occ, voxel_show, voxel_size, canva_size=1000):
     combined_mesh = o3d.geometry.TriangleMesh()
     hx, hy, hz = voxel_size[0]/2, voxel_size[1]/2, voxel_size[2]/2
     
-    # For performance, limit to 30000 voxels for cube rendering
-    if len(points) > 30000:
-        idx = np.random.choice(len(points), 30000, replace=False)
+    # For performance, limit voxels for cube rendering (increase for denser look)
+    max_cubes = 100000
+    if len(points) > max_cubes:
+        idx = np.random.choice(len(points), max_cubes, replace=False)
         points = points[idx]
         colors = colors[idx]
     
