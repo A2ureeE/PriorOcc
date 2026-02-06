@@ -23,7 +23,8 @@ build-old
 ppl.cv
 .vscode
 *.npz
-
+*.png
+*.pdf
 vis/
 *.jpg
 *.pngPlotNeuralNet/
