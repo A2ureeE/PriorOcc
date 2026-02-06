@@ -305,15 +305,27 @@ def main():
             if isinstance(occ_pred, dict) and 'pred_occ' in occ_pred:
                 sem_pred = occ_pred['pred_occ']
             else:
-                # occ_pred is already the semantic prediction tensor
+                # occ_pred is already the semantic prediction tensor/array
                 sem_pred = occ_pred
-            cv2.imwrite(os.path.join(args.viz_dir, '%04d-sem.jpg' % i), occ2img(semantics=sem_pred.cpu())[..., ::-1])
+            
+            # Handle both torch tensor and numpy array
+            if hasattr(sem_pred, 'cpu'):
+                sem_pred_np = sem_pred.cpu().numpy() if hasattr(sem_pred.cpu(), 'numpy') else sem_pred.cpu()
+            else:
+                sem_pred_np = sem_pred  # Already numpy array
+            
+            cv2.imwrite(os.path.join(args.viz_dir, '%04d-sem.jpg' % i), occ2img(semantics=sem_pred_np)[..., ::-1])
             print(os.path.join(args.viz_dir, '%04d-sem.jpg' % i))
             
             # Instance segmentation only available for Pano models
             if isinstance(occ_pred, dict) and 'pano_inst' in occ_pred:
                 inst_pred = occ_pred['pano_inst']
-                cv2.imwrite(os.path.join(args.viz_dir, '%04d-inst.jpg' % i), occ2img(semantics=sem_pred.cpu(), is_pano=True, panoptics=inst_pred.cpu())[..., ::-1])
+                # Handle both torch tensor and numpy array for inst_pred
+                if hasattr(inst_pred, 'cpu'):
+                    inst_pred_np = inst_pred.cpu().numpy() if hasattr(inst_pred.cpu(), 'numpy') else inst_pred.cpu()
+                else:
+                    inst_pred_np = inst_pred
+                cv2.imwrite(os.path.join(args.viz_dir, '%04d-inst.jpg' % i), occ2img(semantics=sem_pred_np, is_pano=True, panoptics=inst_pred_np)[..., ::-1])
                 print(os.path.join(args.viz_dir, '%04d-inst.jpg' % i))
             
             if args.surround_view_img:
