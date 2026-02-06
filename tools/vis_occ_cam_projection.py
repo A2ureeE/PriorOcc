@@ -12,8 +12,23 @@ from pyquaternion import Quaternion
 from tqdm import tqdm
 
 FREE_LABEL = 17
-VOXEL_SIZE = [0.4, 0.4, 0.4]
-POINT_CLOUD_RANGE = [-40, -40, -1, 40, 40, 5.4]
+
+# Use the same config as flashocc-r50-M0.py
+# Grid shape is [200, 200, 16] for [-40, -40, -1, 40, 40, 5.4]
+# Or [256, 256, 32] for [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+# Need to detect from prediction shape
+
+VOXEL_SIZE_SMALL = [0.4, 0.4, 0.4]  # For 200x200x16 grid
+VOXEL_SIZE_LARGE = [0.4, 0.4, 0.25]  # For 256x256x32 grid
+POINT_CLOUD_RANGE_SMALL = [-40, -40, -1, 40, 40, 5.4]
+POINT_CLOUD_RANGE_LARGE = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+
+def get_grid_config(pred_shape):
+    """Detect grid config from prediction shape."""
+    if pred_shape[0] == 200:
+        return VOXEL_SIZE_SMALL, POINT_CLOUD_RANGE_SMALL
+    else:
+        return VOXEL_SIZE_LARGE, POINT_CLOUD_RANGE_LARGE
 
 # Color map (BGR for OpenCV)
 colormap = np.array([
@@ -88,6 +103,10 @@ def render_projection(occ_pred, info, data_root, save_path, voxel_size=0.4):
         'CAM_BACK_LEFT', 'CAM_BACK', 'CAM_BACK_RIGHT'
     ]
     
+    # Detect grid config from prediction shape
+    VOXEL_SIZE, POINT_CLOUD_RANGE = get_grid_config(occ_pred.shape)
+    print(f"  Grid shape: {occ_pred.shape}, Range: {POINT_CLOUD_RANGE}")
+    
     # 1. Get occupied voxel centers in Lidar Frame
     occupied_mask = occ_pred != FREE_LABEL
     x_idx, y_idx, z_idx = np.where(occupied_mask)
@@ -96,31 +115,33 @@ def render_projection(occ_pred, info, data_root, save_path, voxel_size=0.4):
         
     labels = occ_pred[x_idx, y_idx, z_idx]
     
-    # Convert index to physical coordinates (center of voxel)
-    # BEVDet/FlashOCC coordinates: x is forward, y is left
-    # Grid range: [-40, -40, -1]
+    # Voxel half sizes
+    hx, hy, hz = VOXEL_SIZE[0]/2, VOXEL_SIZE[1]/2, VOXEL_SIZE[2]/2
     
-    pts_x = x_idx * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0] + VOXEL_SIZE[0]/2
-    pts_y = y_idx * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1] + VOXEL_SIZE[1]/2
-    pts_z = z_idx * VOXEL_SIZE[2] + POINT_CLOUD_RANGE[2] + VOXEL_SIZE[2]/2
-    
-    points_lidar = np.stack([pts_x, pts_y, pts_z], axis=1)
+    # 8 corners of a unit cube centered at origin
+    cube_corners = np.array([
+        [-hx, -hy, -hz],
+        [+hx, -hy, -hz],
+        [+hx, +hy, -hz],
+        [-hx, +hy, -hz],
+        [-hx, -hy, +hz],
+        [+hx, -hy, +hz],
+        [+hx, +hy, +hz],
+        [-hx, +hy, +hz],
+    ])
     
     # Process each camera
     for view in views:
         cam_info = info['cams'][view]
         
-        # Fix path: info stores 'data/nuscenes/samples/...' but mini is at 'data/mini/samples/...'
+        # Fix path
         raw_path = cam_info['data_path']
-        
-        # Extract the relative part starting from 'samples/' or 'sweeps/'
         if 'samples/' in raw_path:
             rel_path = raw_path[raw_path.find('samples/'):]
         elif 'sweeps/' in raw_path:
             rel_path = raw_path[raw_path.find('sweeps/'):]
         else:
             rel_path = os.path.basename(raw_path)
-            
         img_path = os.path.join(data_root, rel_path)
         
         if not os.path.exists(img_path):
@@ -131,44 +152,103 @@ def render_projection(occ_pred, info, data_root, save_path, voxel_size=0.4):
         if img is None: continue
         
         h, w, _ = img.shape
-        
-        # Project points
-        pts_img, valid_depth, depth = project_points(points_lidar, cam_info)
-        
-        # Filter points inside image
-        valid_uv = check_point_in_img(pts_img, h, w)
-        valid = np.logical_and(valid_depth, valid_uv)
-        
-        # Get valid points
-        pts_draw = pts_img[valid]
-        depth_draw = depth[valid]
-        labels_draw = labels[valid]
-        
-        # Sort by depth (far to near) so near points overwrite far ones
-        sort_idx = np.argsort(depth_draw)[::-1]
-        pts_draw = pts_draw[sort_idx]
-        labels_draw = labels_draw[sort_idx]
-        
-        # Draw on image
-        # Simple point rendering. For "block" effect, we would need 
-        # to project corners of cubes, which is much slower.
-        # Making points larger simulates blocks.
         overlay = img.copy()
         
-        for i in range(len(pts_draw)):
-            pt = pts_draw[i]
-            label = labels_draw[i]
+        # Get lidar2camera transform
+        lidar2camera = np.eye(4, dtype=np.float32)
+        rotation = cam_info['sensor2lidar_rotation']
+        if isinstance(rotation, np.ndarray) and rotation.shape == (3, 3):
+            lidar2camera[:3, :3] = rotation
+        elif len(rotation) == 4:
+            lidar2camera[:3, :3] = Quaternion(rotation).rotation_matrix
+        else:
+            lidar2camera[:3, :3] = np.array(rotation)
+        lidar2camera[:3, 3] = np.array(cam_info['sensor2lidar_translation'])
+        lidar2camera = np.linalg.inv(lidar2camera)
+        
+        intrinsic = np.array(cam_info['cam_intrinsic'])
+        
+        # Collect all voxels with their depth for sorting
+        voxel_data = []
+        
+        for i in range(len(x_idx)):
+            # Voxel center in lidar frame
+            cx = x_idx[i] * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0] + VOXEL_SIZE[0]/2
+            cy = y_idx[i] * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1] + VOXEL_SIZE[1]/2
+            cz = z_idx[i] * VOXEL_SIZE[2] + POINT_CLOUD_RANGE[2] + VOXEL_SIZE[2]/2
+            
+            center = np.array([cx, cy, cz, 1.0])
+            center_cam = lidar2camera @ center
+            depth = center_cam[2]
+            
+            if depth < 0.5:
+                continue
+                
+            voxel_data.append((depth, i, cx, cy, cz))
+        
+        # Sort by depth (far to near)
+        voxel_data.sort(key=lambda x: -x[0])
+        
+        # Draw voxels
+        for depth, i, cx, cy, cz in voxel_data:
+            label = labels[i]
+            
+            # Skip ground classes to avoid occlusion
+            # 11: driveable_surface, 12: other_flat, 13: sidewalk, 14: terrain
+            if label in [11, 12, 13, 14]:
+                continue
+                
             color = colormap[label if label < len(colormap) else 0].tolist()
             
-            # Simple circle/rectangle
-            # Size depends on depth (closer = larger)
-            # Simple approximation: size = f / depth
-            pt_size = max(1, int(120 / depth_draw[sort_idx[i]]))
+            # Get 8 corners in world
+            corners_world = cube_corners + np.array([cx, cy, cz])
+            corners_h = np.hstack([corners_world, np.ones((8, 1))])
             
-            cv2.circle(overlay, (int(pt[0]), int(pt[1])), pt_size, color, -1)
+            # Project to camera
+            corners_cam = (lidar2camera @ corners_h.T).T[:, :3]
+            
+            # Skip if behind camera
+            if np.any(corners_cam[:, 2] < 0.1):
+                continue
+            
+            # Project to image
+            corners_img = (intrinsic @ corners_cam.T).T
+            corners_2d = corners_img[:, :2] / (corners_img[:, 2:3] + 1e-6)
+            
+            # Check if any corner is in image
+            in_img = (corners_2d[:, 0] >= 0) & (corners_2d[:, 0] < w) & \
+                     (corners_2d[:, 1] >= 0) & (corners_2d[:, 1] < h)
+            if not np.any(in_img):
+                continue
+            
+            corners_2d = corners_2d.astype(np.int32)
+            
+            # Draw cube faces (front-facing ones)
+            # Face definitions: indices of corners
+            faces = [
+                [0, 1, 2, 3],  # bottom
+                [4, 5, 6, 7],  # top
+                [0, 1, 5, 4],  # front
+                [2, 3, 7, 6],  # back
+                [0, 3, 7, 4],  # left
+                [1, 2, 6, 5],  # right
+            ]
+            
+            for face_idx in faces:
+                pts = corners_2d[face_idx]
+                
+                # Simple visibility check: face normal dot view direction
+                # Skip for simplicity, just draw all faces
+                
+                # Draw filled polygon
+                cv2.fillPoly(overlay, [pts], color)
+                
+                # Draw edges for block effect
+                edge_color = [max(0, c - 40) for c in color]
+                cv2.polylines(overlay, [pts], True, edge_color, 1)
         
-        # Blend with original image
-        alpha = 0.5
+        # Blend
+        alpha = 0.6
         cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
         
         # Save
