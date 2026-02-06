@@ -301,13 +301,20 @@ def main():
                 print(os.path.join(args.viz_dir, '%04d-height.jpg' % i))
 
 
-            sem_pred = occ_pred['pred_occ']
+            # Handle both dictionary output (Pano models) and tensor output (OCC models)
+            if isinstance(occ_pred, dict) and 'pred_occ' in occ_pred:
+                sem_pred = occ_pred['pred_occ']
+            else:
+                # occ_pred is already the semantic prediction tensor
+                sem_pred = occ_pred
             cv2.imwrite(os.path.join(args.viz_dir, '%04d-sem.jpg' % i), occ2img(semantics=sem_pred.cpu())[..., ::-1])
             print(os.path.join(args.viz_dir, '%04d-sem.jpg' % i))
             
-            inst_pred = occ_pred['pano_inst']
-            cv2.imwrite(os.path.join(args.viz_dir, '%04d-inst.jpg' % i), occ2img(semantics=sem_pred.cpu(), is_pano=True, panoptics=inst_pred.cpu())[..., ::-1])
-            print(os.path.join(args.viz_dir, '%04d-inst.jpg' % i))
+            # Instance segmentation only available for Pano models
+            if isinstance(occ_pred, dict) and 'pano_inst' in occ_pred:
+                inst_pred = occ_pred['pano_inst']
+                cv2.imwrite(os.path.join(args.viz_dir, '%04d-inst.jpg' % i), occ2img(semantics=sem_pred.cpu(), is_pano=True, panoptics=inst_pred.cpu())[..., ::-1])
+                print(os.path.join(args.viz_dir, '%04d-inst.jpg' % i))
             
             if args.surround_view_img:
                 img = data['img_inputs'][0][0][0][::9].cpu().numpy()
