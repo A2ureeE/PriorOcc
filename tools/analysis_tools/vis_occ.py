@@ -305,16 +305,15 @@ def headless_render_occ(pred_occ, voxel_show, voxel_size, canva_size=1000):
     # Background white
     render.scene.set_background([1.0, 1.0, 1.0, 1.0])
     
-    # Camera setup (match original viewpoint)
-    look_at = np.array([-0.185, 0.513, 3.485])
-    front = np.array([-0.974, -0.055, 0.221])
-    up = np.array([0.221, 0.014, 0.975])
+    # Camera setup: elevated view from behind, looking forward
+    # eye: camera position (behind and above the car)
+    # center: point to look at (front of scene)
+    # up: which direction is up
+    eye = np.array([-25, 0, 20])     # Behind (-X), centered (Y=0), elevated (Z=20)
+    center = np.array([15, 0, 0])    # Looking forward (+X direction)
+    up = np.array([0, 0, 1])         # Z is up
     
-    # Calculate eye position from front vector
-    distance = 80  # Approximate distance
-    eye = look_at - front * distance
-    
-    render.setup_camera(60.0, look_at, eye, up)
+    render.setup_camera(60.0, center, eye, up)
     
     # Render
     img = render.render_to_image()
