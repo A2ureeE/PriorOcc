@@ -529,9 +529,7 @@ def main():
         if args.format == 'image':
             out_dir = os.path.join(vis_dir, f'{scene_name}', f'{sample_token}')
             mmcv.mkdir_or_exist(out_dir)
-            for i, img in enumerate(imgs):
-                cv2.imwrite(os.path.join(out_dir, f'img{i}.png'), img)
-            cv2.imwrite(os.path.join(out_dir, 'occ.png'), occ_canvas)
+            # Save overall.png only (skip intermediate files to save space)
             cv2.imwrite(os.path.join(out_dir, 'overall.png'), big_img)
         elif args.format == 'video':
             cv2.putText(big_img, f'{cnt:{cnt}}', (5, 15), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
