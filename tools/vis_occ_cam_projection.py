@@ -186,41 +186,48 @@ def main():
     
     # Map token to info
     token2info = {info['token']: info for info in infos}
+    print(f"Loaded {len(infos)} samples from info file")
     
-    # Find npz files
+    # Find npz files with FULL paths
     npz_files = []
     for root, dirs, files in os.walk(args.pred_dir):
         for f in files:
             if f.endswith('.npz'):
-                token = os.path.basename(os.path.dirname(f)) # .../token/pred.npz
-                # Or sometimes .../scene/token/pred.npz
-                # Try to map path to token
-                npz_files.append((f, token))
+                full_path = os.path.join(root, f)
+                # Token is the parent directory name: .../scene/TOKEN/pred.npz
+                token = os.path.basename(os.path.dirname(full_path))
+                npz_files.append((full_path, token))
     
-    print(f"Found {len(npz_files)} predictions")
+    print(f"Found {len(npz_files)} npz files")
+    
+    # Debug: Show first few tokens
+    if len(npz_files) > 0:
+        print(f"Sample npz tokens: {[t for _, t in npz_files[:3]]}")
+        print(f"Sample info tokens: {list(token2info.keys())[:3]}")
     
     count = 0
     for npz_path, token in npz_files:
-        if token not in token2info:
-            # Try parent dir name
-            token = os.path.basename(os.path.dirname(npz_path))
+        if count >= args.num_samples: 
+            break
             
         if token not in token2info:
+            print(f"Token {token} not found in info file, skipping...")
             continue
-            
-        if count >= args.num_samples: break
         
         info = token2info[token]
-        print(f"Processing {token}...")
+        print(f"[{count+1}/{args.num_samples}] Processing {token}...")
         
         try:
             pred = np.load(npz_path)['pred']
-        except:
+        except Exception as e:
+            print(f"Error loading {npz_path}: {e}")
             continue
             
         save_name = os.path.join(args.save_path, f"{token}.jpg")
         render_projection(pred, info, args.root_path, save_name)
         count += 1
+    
+    print(f"\nDone! Processed {count} samples, saved to {args.save_path}")
 
 if __name__ == '__main__':
     main()
