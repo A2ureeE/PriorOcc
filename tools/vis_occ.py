@@ -150,6 +150,8 @@ def main():
         help='Custom annotation pkl file path (overrides --use-mini)')
     parser.add_argument('--num-samples', type=int, default=None,
         help='Number of samples to visualize (default: all)')
+    parser.add_argument('--save-npz', action='store_true',
+        help='Save predictions as npz files for 3D visualization with analysis_tools/vis_occ.py')
     args = parser.parse_args()
 
     # parse configs
@@ -316,6 +318,17 @@ def main():
             
             cv2.imwrite(os.path.join(args.viz_dir, '%04d-sem.jpg' % i), occ2img(semantics=sem_pred_np)[..., ::-1])
             print(os.path.join(args.viz_dir, '%04d-sem.jpg' % i))
+            
+            # Save npz for 3D visualization
+            if args.save_npz:
+                # Get scene_name and sample_token from data_infos
+                info = val_loader.dataset.data_infos[i]
+                scene_name = info.get('scene_name', 'scene_%04d' % i)
+                sample_token = info.get('token', '%04d' % i)
+                npz_dir = os.path.join(args.viz_dir, 'npz', scene_name, sample_token)
+                os.makedirs(npz_dir, exist_ok=True)
+                np.savez_compressed(os.path.join(npz_dir, 'pred.npz'), pred=sem_pred_np)
+                print(f'Saved npz to {npz_dir}/pred.npz')
             
             # Instance segmentation only available for Pano models
             if isinstance(occ_pred, dict) and 'pano_inst' in occ_pred:
