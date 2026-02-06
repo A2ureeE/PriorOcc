@@ -273,6 +273,10 @@ def parse_args():
         '--fps', type=int, default=10, help='Frame rate of video')
     parser.add_argument(
         '--video-prefix', type=str, default='vis', help='name of video')
+    parser.add_argument('--skip-gt', action='store_true',
+        help='Skip loading ground truth (useful when GT files are not available)')
+    parser.add_argument('--use-mini', action='store_true',
+        help='Use mini dataset info file naming convention')
     args = parser.parse_args()
     return args
 
@@ -283,8 +287,15 @@ def main():
     results_dir = args.res
 
     # load dataset information
-    info_path = \
-        args.root_path + '/bevdetv2-nuscenes_infos_%s.pkl' % args.version
+    if args.use_mini:
+        info_path = args.root_path + '/bevdetv2-nuscenes-mini_infos_%s.pkl' % args.version
+    else:
+        info_path = args.root_path + '/bevdetv2-nuscenes_infos_%s.pkl' % args.version
+    
+    if not os.path.exists(info_path):
+        print(f'Info file not found: {info_path}')
+        print('Try adding --use-mini flag if using mini dataset')
+        return
     dataset = pickle.load(open(info_path, 'rb'))
     # prepare save path and medium
     vis_dir = args.save_path
@@ -318,13 +329,31 @@ def main():
         sample_token = info['token']
 
         pred_occ_path = os.path.join(results_dir, scene_name, sample_token, 'pred.npz')
-        gt_occ_path = info['occ_path']
-
+        
+        # Check if pred file exists
+        if not os.path.exists(pred_occ_path):
+            print(f'Skipping {scene_name}/{sample_token}: pred.npz not found')
+            continue
+            
         pred_occ = np.load(pred_occ_path)['pred']
-        gt_data = np.load(os.path.join(args.root_path, gt_occ_path, 'labels.npz'))
-        voxel_label = gt_data['semantics']
-        lidar_mask = gt_data['mask_lidar']
-        camera_mask = gt_data['mask_camera']
+        
+        # Load GT if not skipped
+        camera_mask = None
+        if not args.skip_gt:
+            gt_occ_path = info['occ_path']
+            # Fix path: remove leading ./ or data/ if present
+            if gt_occ_path.startswith('./'):
+                gt_occ_path = gt_occ_path[2:]
+            if gt_occ_path.startswith('data/nuscenes/'):
+                gt_occ_path = gt_occ_path[len('data/nuscenes/'):]
+            gt_full_path = os.path.join(args.root_path, gt_occ_path, 'labels.npz')
+            if os.path.exists(gt_full_path):
+                gt_data = np.load(gt_full_path)
+                voxel_label = gt_data['semantics']
+                lidar_mask = gt_data['mask_lidar']
+                camera_mask = gt_data['mask_camera']
+            else:
+                print(f'GT not found at {gt_full_path}, using full prediction')
 
         # load imgs
         imgs = []
@@ -333,8 +362,11 @@ def main():
             imgs.append(img)
 
         # occ_canvas
-        voxel_show = np.logical_and(pred_occ != FREE_LABEL, camera_mask)
-        # voxel_show = pred_occ != FREE_LABEL
+        if camera_mask is not None:
+            voxel_show = np.logical_and(pred_occ != FREE_LABEL, camera_mask)
+        else:
+            # If no GT mask, show all non-free voxels
+            voxel_show = pred_occ != FREE_LABEL
         voxel_size = VOXEL_SIZE
         vis = show_occ(torch.from_numpy(pred_occ), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
                        offset=[0, pred_occ.shape[0] * voxel_size[0] * 1.2 * 0, 0])
