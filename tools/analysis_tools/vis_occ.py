@@ -1,7 +1,10 @@
 import os
+# Enable headless rendering (must be before open3d import)
+os.environ['OPEN3D_ENABLE_HEADLESS_RENDERING'] = '1'
 
 import mmcv
 import open3d as o3d
+import open3d.visualization.rendering as rendering
 import numpy as np
 import torch
 import pickle
@@ -229,6 +232,97 @@ def generate_the_ego_car():
     return ego_point_xyz
 
 
+def headless_render_occ(pred_occ, voxel_show, voxel_size, canva_size=1000):
+    """
+    Render occupancy using Open3D OffscreenRenderer (headless mode).
+    
+    Args:
+        pred_occ: (Dx, Dy, Dz) voxel predictions
+        voxel_show: (Dx, Dy, Dz) boolean mask of voxels to show
+        voxel_size: [vx, vy, vz] voxel dimensions
+        canva_size: output image size
+    
+    Returns:
+        occ_canvas: (H, W, 3) RGB image
+    """
+    # Convert voxels to point cloud with colors
+    pred_occ_t = torch.from_numpy(pred_occ)
+    voxel_show_t = torch.from_numpy(voxel_show)
+    
+    occIdx = torch.where(voxel_show_t)
+    if len(occIdx[0]) == 0:
+        return np.ones((canva_size, canva_size, 3), dtype=np.uint8) * 255
+    
+    points = torch.cat((
+        occIdx[0][:, None] * voxel_size[0] + POINT_CLOUD_RANGE[0],
+        occIdx[1][:, None] * voxel_size[1] + POINT_CLOUD_RANGE[1],
+        occIdx[2][:, None] * voxel_size[2] + POINT_CLOUD_RANGE[2]
+    ), dim=1).numpy()
+    
+    labels = pred_occ_t[occIdx].numpy()
+    colors = colormap_to_colors[labels][:, :3] / 255.0
+    
+    # Limit points for performance
+    max_points = 100000
+    if len(points) > max_points:
+        idx = np.random.choice(len(points), max_points, replace=False)
+        points = points[idx]
+        colors = colors[idx]
+    
+    # Create combined mesh from voxel cubes
+    combined_mesh = o3d.geometry.TriangleMesh()
+    hx, hy, hz = voxel_size[0]/2, voxel_size[1]/2, voxel_size[2]/2
+    
+    # For performance, limit to 30000 voxels for cube rendering
+    if len(points) > 30000:
+        idx = np.random.choice(len(points), 30000, replace=False)
+        points = points[idx]
+        colors = colors[idx]
+    
+    print(f"  Creating {len(points)} voxel cubes for headless render...")
+    
+    for i in range(len(points)):
+        box = o3d.geometry.TriangleMesh.create_box(hx*2, hy*2, hz*2)
+        box.translate(points[i] - np.array([hx, hy, hz]))
+        box.paint_uniform_color(colors[i])
+        box.compute_vertex_normals()
+        combined_mesh += box
+    
+    # Create offscreen renderer
+    render = rendering.OffscreenRenderer(canva_size, canva_size)
+    
+    # Material
+    mat = rendering.MaterialRecord()
+    mat.shader = "defaultLit"
+    
+    # Add geometry
+    render.scene.add_geometry("voxels", combined_mesh, mat)
+    
+    # Lighting
+    render.scene.scene.set_sun_light([0.5, -0.5, -1], [1, 1, 1], 75000)
+    render.scene.scene.enable_sun_light(True)
+    
+    # Background white
+    render.scene.set_background([1.0, 1.0, 1.0, 1.0])
+    
+    # Camera setup (match original viewpoint)
+    look_at = np.array([-0.185, 0.513, 3.485])
+    front = np.array([-0.974, -0.055, 0.221])
+    up = np.array([0.221, 0.014, 0.975])
+    
+    # Calculate eye position from front vector
+    distance = 80  # Approximate distance
+    eye = look_at - front * distance
+    
+    render.setup_camera(60.0, look_at, eye, up)
+    
+    # Render
+    img = render.render_to_image()
+    occ_canvas = np.asarray(img)
+    
+    return occ_canvas
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Visualize the predicted '
                                      'result of nuScenes')
@@ -277,6 +371,8 @@ def parse_args():
         help='Skip loading ground truth (useful when GT files are not available)')
     parser.add_argument('--use-mini', action='store_true',
         help='Use mini dataset info file naming convention')
+    parser.add_argument('--headless', action='store_true',
+        help='Use headless rendering (no display required)')
     args = parser.parse_args()
     return args
 
@@ -317,8 +413,13 @@ def main():
     ]
     print('start visualizing results')
 
-    vis = o3d.visualization.VisualizerWithKeyCallback()
-    vis.create_window()
+    # Headless or interactive mode
+    if args.headless:
+        import open3d.visualization.rendering as rendering
+        vis = None  # Will use OffscreenRenderer per frame
+    else:
+        vis = o3d.visualization.VisualizerWithKeyCallback()
+        vis.create_window()
 
     for cnt, info in enumerate(
             dataset['infos'][:min(args.vis_frames, len(dataset['infos']))]):
@@ -368,46 +469,49 @@ def main():
             # If no GT mask, show all non-free voxels
             voxel_show = pred_occ != FREE_LABEL
         voxel_size = VOXEL_SIZE
-        vis = show_occ(torch.from_numpy(pred_occ), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
-                       offset=[0, pred_occ.shape[0] * voxel_size[0] * 1.2 * 0, 0])
+        
+        # Headless or interactive rendering
+        if args.headless:
+            # Use headless rendering
+            occ_canvas = headless_render_occ(pred_occ, voxel_show, voxel_size, canva_size)
+            occ_canvas_resize = cv2.resize(occ_canvas, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
+        else:
+            # Interactive rendering
+            vis = show_occ(torch.from_numpy(pred_occ), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
+                           offset=[0, pred_occ.shape[0] * voxel_size[0] * 1.2 * 0, 0])
 
-        if args.draw_gt:
-            voxel_show = np.logical_and(voxel_label != FREE_LABEL, camera_mask)
-            vis = show_occ(torch.from_numpy(voxel_label), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
-                           offset=[0, voxel_label.shape[0] * voxel_size[0] * 1.2 * 1, 0])
+            if args.draw_gt:
+                voxel_show = np.logical_and(voxel_label != FREE_LABEL, camera_mask)
+                vis = show_occ(torch.from_numpy(voxel_label), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
+                               offset=[0, voxel_label.shape[0] * voxel_size[0] * 1.2 * 1, 0])
 
-        view_control = vis.get_view_control()
+            view_control = vis.get_view_control()
 
-        look_at = np.array([-0.185, 0.513, 3.485])
-        front = np.array([-0.974, -0.055, 0.221])
-        up = np.array([0.221, 0.014, 0.975])
-        zoom = np.array([0.08])
+            look_at = np.array([-0.185, 0.513, 3.485])
+            front = np.array([-0.974, -0.055, 0.221])
+            up = np.array([0.221, 0.014, 0.975])
+            zoom = np.array([0.08])
 
-        view_control.set_lookat(look_at)
-        view_control.set_front(front)
-        view_control.set_up(up)
-        view_control.set_zoom(zoom)
+            view_control.set_lookat(look_at)
+            view_control.set_front(front)
+            view_control.set_up(up)
+            view_control.set_zoom(zoom)
 
-        opt = vis.get_render_option()
-        opt.background_color = np.asarray([1, 1, 1])
-        opt.line_width = 5
+            opt = vis.get_render_option()
+            opt.background_color = np.asarray([1, 1, 1])
+            opt.line_width = 5
 
-        vis.poll_events()
-        vis.update_renderer()
-        vis.run()
+            vis.poll_events()
+            vis.update_renderer()
+            vis.run()
 
-        # if args.format == 'image':
-        #     out_dir = os.path.join(vis_dir, f'{scene_name}', f'{sample_token}')
-        #     mmcv.mkdir_or_exist(out_dir)
-        #     vis.capture_screen_image(os.path.join(out_dir, 'screen_occ.png'), do_render=True)
+            occ_canvas = vis.capture_screen_float_buffer(do_render=True)
+            occ_canvas = np.asarray(occ_canvas)
+            occ_canvas = (occ_canvas * 255).astype(np.uint8)
+            occ_canvas = occ_canvas[..., [2, 1, 0]]
+            occ_canvas_resize = cv2.resize(occ_canvas, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
 
-        occ_canvas = vis.capture_screen_float_buffer(do_render=True)
-        occ_canvas = np.asarray(occ_canvas)
-        occ_canvas = (occ_canvas * 255).astype(np.uint8)
-        occ_canvas = occ_canvas[..., [2, 1, 0]]
-        occ_canvas_resize = cv2.resize(occ_canvas, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
-
-        vis.clear_geometries()
+            vis.clear_geometries()
 
         big_img = np.zeros((900 * 2 + canva_size * scale_factor, 1600 * 3, 3),
                        dtype=np.uint8)
@@ -440,7 +544,8 @@ def main():
 
     if args.format == 'video':
         vout.release()
-    vis.destroy_window()
+    if not args.headless and vis is not None:
+        vis.destroy_window()
 
 
 if __name__ == '__main__':
