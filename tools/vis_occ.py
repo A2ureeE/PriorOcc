@@ -144,6 +144,10 @@ def main():
     parser.add_argument('--draw-pano-gt', action='store_true')
     parser.add_argument('--surround-view-img', action='store_true')
     parser.add_argument('--surround-pano-gt', action='store_true')
+    parser.add_argument('--use-mini', action='store_true',
+        help='Use mini dataset pkl files (bevdetv2-nuscenes-mini_infos_*.pkl)')
+    parser.add_argument('--num-samples', type=int, default=None,
+        help='Number of samples to visualize (default: all)')
     args = parser.parse_args()
 
     # parse configs
@@ -152,6 +156,16 @@ def main():
         cfgs.merge_from_dict(args.override)
 
     cfgs = compat_cfg(cfgs)
+
+    # Handle mini dataset: replace ann_file paths if --use-mini is specified
+    if args.use_mini:
+        data_root = cfgs.data.get('val', cfgs.data.get('test', {})).get('data_root', 'data/nuscenes/')
+        mini_val_ann = data_root + 'bevdetv2-nuscenes-mini_infos_val.pkl'
+        print(f'[Mini Dataset Mode] Using annotation file: {mini_val_ann}')
+        if hasattr(cfgs.data, 'val'):
+            cfgs.data.val.ann_file = mini_val_ann
+        if hasattr(cfgs.data, 'test'):
+            cfgs.data.test.ann_file = mini_val_ann
 
     # set multi-process settings
     setup_multi_processes(cfgs)
@@ -242,7 +256,15 @@ def main():
     if not os.path.exists(args.viz_dir):
         os.makedirs(args.viz_dir)
         
-    for i, data in tqdm(enumerate(val_loader)):
+    # Limit number of samples if specified
+    total_samples = len(val_loader)
+    if args.num_samples is not None:
+        total_samples = min(args.num_samples, len(val_loader))
+        print(f'Visualizing {total_samples} samples out of {len(val_loader)}')
+    
+    for i, data in tqdm(enumerate(val_loader), total=total_samples):
+        if args.num_samples is not None and i >= args.num_samples:
+            break
 
         with torch.no_grad():
             occ_pred = model(return_loss=False, rescale=True, **data)[0]
