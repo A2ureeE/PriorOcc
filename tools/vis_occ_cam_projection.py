@@ -54,9 +54,19 @@ def get_lidar2camera(cam_info):
 def project_points(points, cam_info):
     # 1. Lidar to Camera
     lidar2camera = np.eye(4, dtype=np.float32)
-    lidar2camera[:3, :3] = Quaternion(cam_info['sensor2lidar_rotation']).rotation_matrix
-    lidar2camera[:3, 3] = cam_info['sensor2lidar_translation']
-    lidar2camera = np.linalg.inv(lidar2camera) # Camera to Lidar -> Lidar to Camera
+    
+    # Handle both rotation matrix (3x3) and quaternion (4,) formats
+    rotation = cam_info['sensor2lidar_rotation']
+    if isinstance(rotation, np.ndarray) and rotation.shape == (3, 3):
+        lidar2camera[:3, :3] = rotation
+    elif len(rotation) == 4:
+        lidar2camera[:3, :3] = Quaternion(rotation).rotation_matrix
+    else:
+        # Assume it's already a rotation matrix stored as list
+        lidar2camera[:3, :3] = np.array(rotation)
+    
+    lidar2camera[:3, 3] = np.array(cam_info['sensor2lidar_translation'])
+    lidar2camera = np.linalg.inv(lidar2camera)  # Camera to Lidar -> Lidar to Camera
     
     points_h = np.concatenate([points, np.ones((points.shape[0], 1))], axis=1)
     points_cam_h = points_h @ lidar2camera.T
@@ -68,7 +78,7 @@ def project_points(points, cam_info):
     
     intrinsic = np.array(cam_info['cam_intrinsic'])
     points_img = points_cam @ intrinsic.T
-    points_img = points_img[:, :2] / points_img[:, 2:3]
+    points_img = points_img[:, :2] / (points_img[:, 2:3] + 1e-6)
     
     return points_img, valid_depth, depth
 
