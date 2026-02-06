@@ -146,6 +146,8 @@ def main():
     parser.add_argument('--surround-pano-gt', action='store_true')
     parser.add_argument('--use-mini', action='store_true',
         help='Use mini dataset pkl files (bevdetv2-nuscenes-mini_infos_*.pkl)')
+    parser.add_argument('--ann-file', type=str, default=None,
+        help='Custom annotation pkl file path (overrides --use-mini)')
     parser.add_argument('--num-samples', type=int, default=None,
         help='Number of samples to visualize (default: all)')
     args = parser.parse_args()
@@ -157,10 +159,17 @@ def main():
 
     cfgs = compat_cfg(cfgs)
 
-    # Handle mini dataset: replace ann_file paths if --use-mini is specified
-    if args.use_mini:
-        data_root = cfgs.data.get('val', cfgs.data.get('test', {})).get('data_root', 'data/nuscenes/')
-        mini_val_ann = data_root + 'bevdetv2-nuscenes-mini_infos_val.pkl'
+    # Handle custom annotation file or mini dataset
+    if args.ann_file:
+        # Use custom annotation file path
+        print(f'[Custom Mode] Using annotation file: {args.ann_file}')
+        if hasattr(cfgs.data, 'val'):
+            cfgs.data.val.ann_file = args.ann_file
+        if hasattr(cfgs.data, 'test'):
+            cfgs.data.test.ann_file = args.ann_file
+    elif args.use_mini:
+        # Use mini dataset from data/mini/ folder
+        mini_val_ann = 'data/mini/bevdetv2-nuscenes-mini_infos_val.pkl'
         print(f'[Mini Dataset Mode] Using annotation file: {mini_val_ann}')
         if hasattr(cfgs.data, 'val'):
             cfgs.data.val.ann_file = mini_val_ann
