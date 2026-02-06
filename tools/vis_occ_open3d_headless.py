@@ -1,15 +1,28 @@
 """
 Open3D Headless 3D OCC Visualization
-Uses Open3D's offscreen rendering - works on servers without display.
+Uses Open3D's offscreen rendering with GPU support.
 """
 import os
+
+# Enable GPU rendering via EGL (must be set BEFORE importing open3d)
+os.environ['OPEN3D_ENABLE_HEADLESS_RENDERING'] = '1'
+os.environ['__EGL_VENDOR_LIBRARY_FILENAMES'] = '/usr/share/glvnd/egl_vendor.d/50_mesa.json'
+os.environ['PYOPENGL_PLATFORM'] = 'egl'
+
 import numpy as np
 import argparse
 import pickle
 import open3d as o3d
 
-# Enable headless rendering
-os.environ['OPEN3D_HEADLESS'] = '1'
+# Print Open3D device info
+try:
+    if o3d.core.cuda.is_available():
+        print(f"[INFO] CUDA available: GPU will be used for rendering")
+        print(f"[INFO] CUDA device count: {o3d.core.cuda.device_count()}")
+    else:
+        print("[WARNING] CUDA not available in Open3D, using CPU rendering")
+except:
+    print("[WARNING] Could not check CUDA status")
 
 FREE_LABEL = 17
 VOXEL_SIZE = [0.4, 0.4, 0.4]
@@ -65,34 +78,85 @@ def create_voxel_grid(occ_pred):
     return pcd
 
 
-def render_and_save(pcd, save_path, width=1920, height=1080):
-    """Render point cloud using Open3D offscreen renderer."""
-    # Create voxel grid from point cloud
-    voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=0.4)
-    
+def render_and_save(pcd, save_path, occ_pred, width=1920, height=1080):
+    """Render voxels as cubes using Open3D offscreen renderer."""
     # Create offscreen renderer
     render = o3d.visualization.rendering.OffscreenRenderer(width, height)
     
     # Setup material
     mat = o3d.visualization.rendering.MaterialRecord()
-    mat.shader = "defaultUnlit"
+    mat.shader = "defaultLit"  # Use lit shader for better 3D appearance
     
-    # Add geometry
-    render.scene.add_geometry("voxels", voxel_grid, mat)
+    # Get non-free voxels
+    occupied_mask = occ_pred != FREE_LABEL
+    x, y, z = np.where(occupied_mask)
+    
+    if len(x) == 0:
+        print("No occupied voxels")
+        return
+    
+    # Downsample if too many voxels (for performance)
+    max_voxels = 50000
+    if len(x) > max_voxels:
+        indices = np.random.choice(len(x), max_voxels, replace=False)
+        x, y, z = x[indices], y[indices], z[indices]
+    
+    labels = occ_pred[x, y, z]
+    
+    # Create combined mesh from all cubes
+    combined_mesh = o3d.geometry.TriangleMesh()
+    
+    print(f"Creating {len(x)} voxel cubes...")
+    
+    for i in range(len(x)):
+        # Create a unit cube
+        cube = o3d.geometry.TriangleMesh.create_box(
+            width=VOXEL_SIZE[0] * 0.95,  # Slightly smaller for gap effect
+            height=VOXEL_SIZE[1] * 0.95,
+            depth=VOXEL_SIZE[2] * 0.95
+        )
+        
+        # Move cube to correct position
+        center_x = x[i] * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0]
+        center_y = y[i] * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1]
+        center_z = z[i] * VOXEL_SIZE[2] + POINT_CLOUD_RANGE[2]
+        
+        cube.translate([center_x, center_y, center_z])
+        
+        # Set color
+        color = colormap[labels[i] % len(colormap)]
+        cube.paint_uniform_color(color)
+        
+        # Compute normals for lighting
+        cube.compute_vertex_normals()
+        
+        # Add to combined mesh
+        combined_mesh += cube
+    
+    print("Rendering...")
+    
+    # Add geometry to scene
+    render.scene.add_geometry("voxels", combined_mesh, mat)
     
     # Add coordinate frame
     coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0)
-    render.scene.add_geometry("coord", coord_frame, mat)
+    mat_coord = o3d.visualization.rendering.MaterialRecord()
+    mat_coord.shader = "defaultUnlit"
+    render.scene.add_geometry("coord", coord_frame, mat_coord)
     
-    # Setup camera - front-ish view
-    bounds = voxel_grid.get_axis_aligned_bounding_box()
+    # Setup lighting
+    render.scene.scene.set_sun_light([0.5, -0.5, -1], [1, 1, 1], 50000)
+    render.scene.scene.enable_sun_light(True)
+    
+    # Setup camera
+    bounds = combined_mesh.get_axis_aligned_bounding_box()
     center = bounds.get_center()
     
-    # Camera position: looking from front-left, slightly elevated
-    eye = np.array([center[0] - 60, center[1] - 40, center[2] + 30])
+    # Camera position: front-left elevated view (similar to reference image)
+    eye = np.array([center[0] - 50, center[1] - 70, center[2] + 35])
     up = np.array([0, 0, 1])
     
-    render.setup_camera(60.0, center, eye, up)
+    render.setup_camera(45.0, center, eye, up)
     
     # Set background to white
     render.scene.set_background([1.0, 1.0, 1.0, 1.0])
@@ -186,7 +250,7 @@ def main():
             render_multiple_views(pcd, args.save_path, base_name)
         else:
             save_path = os.path.join(args.save_path, f"{base_name}_3d.png")
-            render_and_save(pcd, save_path)
+            render_and_save(pcd, save_path, pred_occ)
     
     print(f"\nDone! Results saved to {args.save_path}")
 
