@@ -99,17 +99,19 @@ def render_projection(occ_pred, info, data_root, save_path, voxel_size=0.4):
     # Process each camera
     for view in views:
         cam_info = info['cams'][view]
-        img_path = os.path.join(data_root, cam_info['data_path'])
         
-        # Handle mini dataset path difference
-        if not os.path.exists(img_path):
-            # Try to handle relative path issue
-            if img_path.startswith('/'):
-                 # Try finding 'samples' or 'sweeps'
-                 idx = img_path.find('samples')
-                 if idx == -1: idx = img_path.find('sweeps')
-                 if idx != -1:
-                     img_path = os.path.join(data_root, img_path[idx:])
+        # Fix path: info stores 'data/nuscenes/samples/...' but mini is at 'data/mini/samples/...'
+        raw_path = cam_info['data_path']
+        
+        # Extract the relative part starting from 'samples/' or 'sweeps/'
+        if 'samples/' in raw_path:
+            rel_path = raw_path[raw_path.find('samples/'):]
+        elif 'sweeps/' in raw_path:
+            rel_path = raw_path[raw_path.find('sweeps/'):]
+        else:
+            rel_path = os.path.basename(raw_path)
+            
+        img_path = os.path.join(data_root, rel_path)
         
         if not os.path.exists(img_path):
             print(f"Image not found: {img_path}")
