@@ -274,7 +274,7 @@ def headless_render_occ(pred_occ, voxel_show, voxel_size, canva_size=1000):
     hx, hy, hz = voxel_size[0]/2, voxel_size[1]/2, voxel_size[2]/2
     
     # For performance, limit voxels for cube rendering (increase for denser look)
-    max_cubes = 100000
+    max_cubes = 10000000
     if len(points) > max_cubes:
         idx = np.random.choice(len(points), max_cubes, replace=False)
         points = points[idx]
