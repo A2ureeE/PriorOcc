@@ -37,11 +37,41 @@ colormap = np.array([
 ], dtype=np.float32) / 255.0
 
 
-def render_3d_scatter(occ_pred, save_path, max_points=30000, dpi=150):
+def render_3d_scatter(occ_pred, save_path, max_points=30000, dpi=150, filter_noise=True):
     """Render occupancy as 3D scatter plot with Matplotlib."""
-    # Get non-free voxels
-    occupied_mask = occ_pred != FREE_LABEL
+    # Get non-free voxels, also filter out 'others' class (label 0) which often appears as noise
+    occupied_mask = (occ_pred != FREE_LABEL) & (occ_pred != 0)
     x, y, z = np.where(occupied_mask)
+    
+    if filter_noise:
+        # Filter out floating noise caused by depth estimation errors
+        # Problem: Far-away buildings appear floating due to inaccurate depth
+        labels_temp = occ_pred[x, y, z]
+        wx_temp = x * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0]
+        wy_temp = y * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1]
+        wz_temp = z * VOXEL_SIZE[2] + POINT_CLOUD_RANGE[2]
+        
+        # Calculate horizontal distance from ego vehicle (at origin)
+        distance = np.sqrt(wx_temp**2 + wy_temp**2)
+        
+        # Distance-based height limit: far objects should be closer to ground
+        # Near (0-20m): allow up to 4m height
+        # Medium (20-30m): allow up to 2m height  
+        # Far (30-40m): allow up to 0.5m height (ground level only)
+        max_height = np.where(distance < 20, 4.0,
+                     np.where(distance < 30, 2.0, 0.5))
+        
+        # Ground-based classes that should stay low
+        ground_classes = [11, 12, 13, 14]  # driveable, other_flat, sidewalk, terrain
+        is_ground_class = np.isin(labels_temp, ground_classes)
+        
+        # Valid tall classes (vegetation, some manmade structures near ego)
+        valid_tall_near = (distance < 25) & np.isin(labels_temp, [15, 16])  # manmade, vegetation
+        
+        # Keep if: below height limit OR (tall class AND near ego)
+        keep_mask = (wz_temp < max_height) | valid_tall_near
+        
+        x, y, z = x[keep_mask], y[keep_mask], z[keep_mask]
     
     if len(x) == 0:
         print("No occupied voxels found")
@@ -99,8 +129,8 @@ def render_3d_scatter(occ_pred, save_path, max_points=30000, dpi=150):
 
 def render_bev(occ_pred, save_path, max_points=200000, dpi=150):
     """Render bird's eye view (top-down) as 2D scatter plot."""
-    # Get non-free voxels
-    occupied_mask = occ_pred != FREE_LABEL
+    # Get non-free voxels, filter out 'others' class (label 0) which often appears as noise
+    occupied_mask = (occ_pred != FREE_LABEL) & (occ_pred != 0)
     x, y, z = np.where(occupied_mask)
     
     if len(x) == 0:
@@ -140,11 +170,27 @@ def render_bev(occ_pred, save_path, max_points=200000, dpi=150):
     return True
 
 
-def render_multi_view(occ_pred, save_dir, base_name, max_points=30000, dpi=150):
+def render_multi_view(occ_pred, save_dir, base_name, max_points=30000, dpi=150, filter_noise=True):
     """Render multiple views of the occupancy."""
-    # Get non-free voxels
-    occupied_mask = occ_pred != FREE_LABEL
+    # Get non-free voxels, filter out 'others' class (label 0) which often appears as noise
+    occupied_mask = (occ_pred != FREE_LABEL) & (occ_pred != 0)
     x, y, z = np.where(occupied_mask)
+    
+    if filter_noise:
+        # Filter out floating noise caused by depth estimation errors
+        labels_temp = occ_pred[x, y, z]
+        wx_temp = x * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0]
+        wy_temp = y * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1]
+        wz_temp = z * VOXEL_SIZE[2] + POINT_CLOUD_RANGE[2]
+        
+        # Distance-based height limit
+        distance = np.sqrt(wx_temp**2 + wy_temp**2)
+        max_height = np.where(distance < 20, 4.0,
+                     np.where(distance < 30, 2.0, 0.5))
+        
+        valid_tall_near = (distance < 25) & np.isin(labels_temp, [15, 16])
+        keep_mask = (wz_temp < max_height) | valid_tall_near
+        x, y, z = x[keep_mask], y[keep_mask], z[keep_mask]
     
     if len(x) == 0:
         print("No occupied voxels found")
