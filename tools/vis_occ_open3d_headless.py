@@ -1,13 +1,20 @@
 """
 Open3D Headless 3D OCC Visualization
-Uses Open3D's offscreen rendering with GPU support.
+Uses Open3D's offscreen rendering with CPU fallback for containers.
 """
 import os
+import sys
 
-# Enable GPU rendering via EGL (must be set BEFORE importing open3d)
-os.environ['OPEN3D_ENABLE_HEADLESS_RENDERING'] = '1'
-os.environ['__EGL_VENDOR_LIBRARY_FILENAMES'] = '/usr/share/glvnd/egl_vendor.d/50_mesa.json'
-os.environ['PYOPENGL_PLATFORM'] = 'egl'
+# ============================================================
+# FORCE CPU RENDERING (must be set BEFORE importing open3d)
+# This is required for Docker containers without proper EGL setup
+# ============================================================
+os.environ['OPEN3D_CPU_RENDERING'] = 'true'
+os.environ['XDG_RUNTIME_DIR'] = '/tmp/runtime-root'
+
+# Create runtime dir if needed
+import pathlib
+pathlib.Path('/tmp/runtime-root').mkdir(parents=True, exist_ok=True)
 
 import numpy as np
 import argparse
