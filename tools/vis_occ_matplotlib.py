@@ -97,6 +97,49 @@ def render_3d_scatter(occ_pred, save_path, max_points=30000, dpi=150):
     return True
 
 
+def render_bev(occ_pred, save_path, max_points=200000, dpi=150):
+    """Render bird's eye view (top-down) as 2D scatter plot."""
+    # Get non-free voxels
+    occupied_mask = occ_pred != FREE_LABEL
+    x, y, z = np.where(occupied_mask)
+    
+    if len(x) == 0:
+        print("No occupied voxels found")
+        return False
+    
+    # Downsample only if really necessary
+    if len(x) > max_points:
+        indices = np.random.choice(len(x), max_points, replace=False)
+        x, y, z = x[indices], y[indices], z[indices]
+    
+    # Convert to world coordinates (only X, Y for BEV)
+    wx = x * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0]
+    wy = y * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1]
+    
+    labels = occ_pred[x, y, z]
+    colors = colormap[labels % len(colormap)]
+    
+    # Create 2D figure for BEV
+    fig, ax = plt.subplots(figsize=(12, 12))
+    
+    # Large square markers to look like filled voxels
+    ax.scatter(wx, wy, c=colors, s=15, alpha=0.9, marker='s', edgecolors='none')
+    
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_xlim([POINT_CLOUD_RANGE[0], POINT_CLOUD_RANGE[3]])
+    ax.set_ylim([POINT_CLOUD_RANGE[1], POINT_CLOUD_RANGE[4]])
+    ax.set_aspect('equal')
+    ax.set_title(f'Bird\'s Eye View ({len(x)} voxels)')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+    plt.close()
+    
+    return True
+
+
 def render_multi_view(occ_pred, save_dir, base_name, max_points=30000, dpi=150):
     """Render multiple views of the occupancy."""
     # Get non-free voxels
@@ -168,6 +211,8 @@ def main():
     parser.add_argument('--dpi', type=int, default=150)
     parser.add_argument('--multi-view', action='store_true',
                         help='Generate multiple view angles')
+    parser.add_argument('--bev', action='store_true',
+                        help='Generate bird\'s eye view (top-down) only')
     args = parser.parse_args()
     
     os.makedirs(args.save_path, exist_ok=True)
@@ -199,6 +244,10 @@ def main():
         if args.multi_view:
             render_multi_view(pred_occ, args.save_path, base_name, 
                               max_points=args.max_points, dpi=args.dpi)
+        elif args.bev:
+            # BEV (bird's eye view) - top-down
+            render_bev(pred_occ, os.path.join(args.save_path, f"{base_name}_bev.png"),
+                       max_points=args.max_points, dpi=args.dpi)
         else:
             save_path = os.path.join(args.save_path, f"{base_name}_3d.png")
             render_3d_scatter(pred_occ, save_path, 
