@@ -127,7 +127,7 @@ def render_3d_scatter(occ_pred, save_path, max_points=30000, dpi=150, filter_noi
     return True
 
 
-def render_bev(occ_pred, save_path, max_points=200000, dpi=150):
+def render_bev(occ_pred, save_path, max_points=200000, dpi=150, filter_noise=True):
     """Render bird's eye view (top-down) as 2D scatter plot."""
     # Get non-free voxels, filter out 'others' class (label 0) which often appears as noise
     occupied_mask = (occ_pred != FREE_LABEL) & (occ_pred != 0)
@@ -135,6 +135,31 @@ def render_bev(occ_pred, save_path, max_points=200000, dpi=150):
     
     if len(x) == 0:
         print("No occupied voxels found")
+        return False
+    
+    if filter_noise:
+        # For BEV, filter out floating voxels at far distances
+        # These are typically depth estimation errors
+        wx_temp = x * VOXEL_SIZE[0] + POINT_CLOUD_RANGE[0]
+        wy_temp = y * VOXEL_SIZE[1] + POINT_CLOUD_RANGE[1]
+        wz_temp = z * VOXEL_SIZE[2] + POINT_CLOUD_RANGE[2]
+        
+        distance = np.sqrt(wx_temp**2 + wy_temp**2)
+        labels_temp = occ_pred[x, y, z]
+        
+        # Height threshold based on distance
+        # Near: allow normal heights, Far: only ground-level
+        max_height = np.where(distance < 20, 4.0,
+                     np.where(distance < 30, 2.5, 1.5))
+        
+        # Allow tall things near ego (buildings, trees)
+        valid_tall = (distance < 25) & np.isin(labels_temp, [15, 16])
+        
+        keep_mask = (wz_temp < max_height) | valid_tall
+        x, y, z = x[keep_mask], y[keep_mask], z[keep_mask]
+    
+    if len(x) == 0:
+        print("No voxels after filtering")
         return False
     
     # Downsample only if really necessary

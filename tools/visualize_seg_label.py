@@ -4,6 +4,11 @@
 
 用法:
     python tools/visualize_seg_label.py --label /tmp/debug_seg_xxx/samples/CAM_FRONT/debug.png
+    # 可视化某个标签文件
+python tools/visualize_seg_label.py --label /tmp/debug_seg_xxx/samples/CAM_FRONT/debug.png
+
+# 指定输出路径
+python tools/visualize_seg_label.py --label /tmp/debug_seg_xxx/samples/CAM_FRONT/debug.png --output my_vis.png
 """
 import os
 import argparse

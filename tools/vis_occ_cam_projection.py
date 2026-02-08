@@ -66,36 +66,50 @@ def get_lidar2camera(cam_info):
     lidar2cam_rt[3, :3] = -lidar2cam_t
     return lidar2cam_rt.T
 
-def project_points(points, cam_info):
-    # 1. Lidar to Camera
-    lidar2camera = np.eye(4, dtype=np.float32)
+def lidar2img(points_lidar, camera_info):
+    """
+    Project lidar points to image plane.
+    Exactly matches the implementation in analysis_tools/vis.py
+    """
+    # Homogeneous coordinates
+    points_lidar_homogeneous = np.concatenate(
+        [points_lidar, np.ones((points_lidar.shape[0], 1), dtype=points_lidar.dtype)], 
+        axis=1
+    )
     
-    # Handle both rotation matrix (3x3) and quaternion (4,) formats
-    rotation = cam_info['sensor2lidar_rotation']
+    # camera2lidar transform (sensor2lidar)
+    camera2lidar = np.eye(4, dtype=np.float32)
+    
+    rotation = camera_info['sensor2lidar_rotation']
     if isinstance(rotation, np.ndarray) and rotation.shape == (3, 3):
-        lidar2camera[:3, :3] = rotation
+        camera2lidar[:3, :3] = rotation
     elif len(rotation) == 4:
-        lidar2camera[:3, :3] = Quaternion(rotation).rotation_matrix
+        camera2lidar[:3, :3] = Quaternion(rotation).rotation_matrix
     else:
-        # Assume it's already a rotation matrix stored as list
-        lidar2camera[:3, :3] = np.array(rotation)
+        camera2lidar[:3, :3] = np.array(rotation)
     
-    lidar2camera[:3, 3] = np.array(cam_info['sensor2lidar_translation'])
-    lidar2camera = np.linalg.inv(lidar2camera)  # Camera to Lidar -> Lidar to Camera
+    camera2lidar[:3, 3] = np.array(camera_info['sensor2lidar_translation'])
     
-    points_h = np.concatenate([points, np.ones((points.shape[0], 1))], axis=1)
-    points_cam_h = points_h @ lidar2camera.T
-    points_cam = points_cam_h[:, :3]
+    # Invert to get lidar2camera
+    lidar2camera = np.linalg.inv(camera2lidar)
     
-    # 2. Camera to Image
-    depth = points_cam[:, 2]
-    valid_depth = depth > 0.1
+    # Transform points to camera frame
+    points_camera_homogeneous = points_lidar_homogeneous @ lidar2camera.T
+    points_camera = points_camera_homogeneous[:, :3]
     
-    intrinsic = np.array(cam_info['cam_intrinsic'])
-    points_img = points_cam @ intrinsic.T
-    points_img = points_img[:, :2] / (points_img[:, 2:3] + 1e-6)
+    # Validity check: points must be in front of camera
+    valid = points_camera[:, 2] > 0.5
+    depth = points_camera[:, 2].copy()
     
-    return points_img, valid_depth, depth
+    # Normalize by Z (this is the key step!)
+    points_camera = points_camera / (points_camera[:, 2:3] + 1e-6)
+    
+    # Apply camera intrinsic
+    camera2img = np.array(camera_info['cam_intrinsic'])
+    points_img = points_camera @ camera2img.T
+    points_img = points_img[:, :2]
+    
+    return points_img, valid, depth
 
 def render_projection(occ_pred, info, data_root, save_path, voxel_size=0.4):
     views = [
@@ -208,12 +222,13 @@ def render_projection(occ_pred, info, data_root, save_path, voxel_size=0.4):
             corners_cam = (lidar2camera @ corners_h.T).T[:, :3]
             
             # Skip if behind camera
-            if np.any(corners_cam[:, 2] < 0.1):
+            if np.any(corners_cam[:, 2] < 0.5):
                 continue
             
-            # Project to image
-            corners_img = (intrinsic @ corners_cam.T).T
-            corners_2d = corners_img[:, :2] / (corners_img[:, 2:3] + 1e-6)
+            # Project to image: normalize by Z first, then apply intrinsic
+            corners_cam_normalized = corners_cam / (corners_cam[:, 2:3] + 1e-6)
+            corners_img = (intrinsic @ corners_cam_normalized.T).T
+            corners_2d = corners_img[:, :2]
             
             # Check if any corner is in image
             in_img = (corners_2d[:, 0] >= 0) & (corners_2d[:, 0] < w) & \
