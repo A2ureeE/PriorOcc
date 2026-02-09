@@ -1,5 +1,5 @@
 """
-FlashOCC-R50 配置文件 (nuScenes mini 版本)
+PriorOcc-R50 配置文件 (nuScenes mini 版本)
 
 用于在 nuScenes mini 数据集上快速验证训练流程。
 相比完整版本的修改：

@@ -6,7 +6,7 @@ from mmdet.models import NECKS
 @NECKS.register_module()
 class SemanticInjector(nn.Module):
     """
-    SemanticInjector for FlashOcc Scheme C.
+    SemanticInjector for PriorOcc Scheme C.
     Injects 2D semantic priors into the feature map before View Transformer.
     
     Args:

@@ -3,7 +3,8 @@
 调试数据流程 - 检查 gt_semantic_2d 是否正确传递到模型
 """
 import sys
-sys.path.insert(0, '/home/azure/learning/FlashOCC')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入 plugin 以注册自定义模块
 import projects.mmdet3d_plugin

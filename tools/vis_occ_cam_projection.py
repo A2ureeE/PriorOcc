@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 FREE_LABEL = 17
 
-# Use the same config as flashocc-r50-M0.py
+# Grid config matching the base config (e.g., flashocc-r50-M0.py)
 # Grid shape is [200, 200, 16] for [-40, -40, -1, 40, 40, 5.4]
 # Or [256, 256, 32] for [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 # Need to detect from prediction shape

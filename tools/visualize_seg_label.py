@@ -15,7 +15,7 @@ import argparse
 import numpy as np
 import cv2
 
-# FlashOcc 17 类调色板 (RGB)
+# PriorOcc 17 类调色板 (RGB)
 PALETTE = np.array([
     [0, 0, 0],        # 0: others (黑色)
     [255, 120, 50],   # 1: barrier (橙色)

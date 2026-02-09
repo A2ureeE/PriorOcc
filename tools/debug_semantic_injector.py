@@ -8,7 +8,7 @@ This script validates:
 4. forward_train runs without errors
 
 Usage:
-    cd /home/azure/learning/FlashOCC
+    cd PriorOcc  # 假设已在项目父目录
     python tools/debug_semantic_injector.py
 """
 

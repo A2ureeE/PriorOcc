@@ -3,8 +3,8 @@
 计算完整模型的参数量和计算量（FLOPs）
 
 用法：
-    python tools/count_model_params.py projects/configs/flashocc/flashocc-r50.py
-    python tools/count_model_params.py projects/configs/flashocc/flashocc-r50.py --checkpoint work_dirs/test3/latest.pth
+    python tools/count_model_params.py projects/configs/YOUR_CONFIG.py
+    python tools/count_model_params.py projects/configs/YOUR_CONFIG.py --checkpoint work_dirs/YOUR_EXP/latest.pth
 """
 import os
 import sys

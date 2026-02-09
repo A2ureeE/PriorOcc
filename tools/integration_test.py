@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FlashOCC 集成测试脚本
+PriorOcc 集成测试脚本
 
 验证以下内容：
 1. 配置文件能否正确构建 BEVDetOCC 模型（含 SemanticInjector）
@@ -9,7 +9,7 @@ FlashOCC 集成测试脚本
 4. 反向传播是否正常
 
 运行方式：
-    cd /home/azure/learning/FlashOCC
+    cd PriorOcc  # 假设已在项目父目录
     python tools/integration_test.py
 
 中文注释已添加以便理解每一步。
@@ -124,7 +124,7 @@ def build_synthetic_batch(cfg, batch_size, num_cams, device):
 
 def main():
     print('=' * 60)
-    print('FlashOCC 集成测试')
+    print('PriorOcc 集成测试')
     print('=' * 60)
     
     # ============================================================
