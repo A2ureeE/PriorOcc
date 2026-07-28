@@ -1,0 +1,647 @@
+# 方向 5：4D 场景流 + 语义占用联合建模（FlowOcc）研究方案
+
+## Context
+
+PriorOcc 基于 FlashOCC，通过 SemanticInjector 模块在 backbone 之后、view transform 之前注入 2D 语义先验（SegFormer 伪标签），辅以 2D 分类损失，提升了 3D 语义占用预测的 mIoU。但 PriorOcc 目前仅支持**单帧输入**，无法感知物体运动。
+
+本方案将 PriorOcc 扩展为 **FlowOcc**：在保留 2D 语义先验注入的基础上，引入时序融合和场景流预测分支，实现 **3D 语义占用 + 3D 场景流** 的联合建模。核心创新点是用语义先验引导场景流预测——"语义先验不仅告诉模型 *那里有什么*，还帮助判断 *它在怎么动*"。
+
+**交付物：** 将完整方案保存为 `~/Desktop/FlowOcc_研究方案.md`
+
+---
+
+## 一、现有 PriorOcc 架构回顾
+
+### 1.1 整体流程
+
+```
+Multi-Camera Images (6 cams)
+  → ResNet-50 Backbone + CustomFPN Neck
+  → SemanticInjector [PriorOcc 新增]
+  → LSSViewTransformerBEVDepth + DepthNet (含 SGDM)
+  → BEV Encoder: CustomResNet + FPN_LSS
+  → BEVOCCHead2D (Channel-to-Height 解码器)
+  → 3D Occupancy Prediction (200×200×16, 18 classes)
+```
+
+### 1.2 SemanticInjector 模块
+
+**文件位置：** `projects/mmdet3d_plugin/models/model_utils/semantic_injector.py`
+
+包含两个子模块：
+- **SegHead（分类头）：** `Conv2d 3×3 (C→C) → BN → ReLU → Conv2d 1×1 (C→num_classes)`，输出 2D 语义 logits `(B*N, 17, H, W)`
+- **FusionLayer（融合层）：** `Concat[feat, seg_logits] → Conv2d 1×1 (C+17→C) → BN → ReLU`，将语义信息融合回特征
+
+**位置：** backbone/neck 之后、view transformer 之前。`seg_logits` 同时传递给 DepthNet 的 SGDM 模块用于深度引导。
+
+### 1.3 配置参数
+
+```python
+semantic_injector=dict(
+    type='SemanticInjector',
+    in_channels=256,
+    out_channels=256,
+    num_classes=17,  # nuScenes 17 语义类（不含 free）
+    norm_cfg=dict(type='BN'),
+    loss_2d_seg=dict(type='CrossEntropyLoss', ignore_index=255, loss_weight=0.3),
+)
+```
+
+### 1.4 关键模块清单
+
+| 模块 | 文件路径 | 作用 |
+|------|----------|------|
+| SemanticInjector | `models/model_utils/semantic_injector.py` | 2D 语义先验注入 |
+| SGDM | `models/model_utils/depthnet.py` | SE-block 语义门控深度估计 |
+| LiteBSDM | `models/model_utils/depthnet.py` | 双向语义-深度学习 |
+| LSSViewTransformerBEVDepth | `models/necks/view_transformer.py` | Lift-Splat-Shoot 视角变换 |
+| BEVOCCHead2D | `models/dense_heads/bev_occ_head.py` | C2H 占用预测头 |
+| BEVDetOCC | `models/detectors/bevdet_occ.py` | 主检测器 |
+| LoadSemanticSeg2D | `datasets/pipelines/loading_seg2d.py` | 2D 语义标签加载 |
+
+### 1.5 网格配置
+
+```python
+grid_config = {
+    'x': [-40, 40, 0.4],   # 200 cells
+    'y': [-40, 40, 0.4],   # 200 cells
+    'z': [-1, 5.4, 6.4],   # 1 cell (z 轴压缩)
+}
+# Occupancy: 200×200×16, 18 classes (17 语义 + free)
+```
+
+### 1.6 当前性能
+
+- **mIoU = 32.08**（FlashOCC baseline 基础上提升，mask=True, class_balance=True）
+- 训练 30 epochs，AdamW (lr=1e-4)，从 BEVDet 预训练初始化
+
+---
+
+## 二、FlowOcc 各模块功能架构详解
+
+### 整体架构图
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │              Frame t & Frame t-1             │
+                    └──────────┬──────────────────┬────────────────┘
+                               │                  │
+                    ┌──────────▼──────┐ ┌────────▼────────┐
+                    │  Image Backbone │ │  Image Backbone │
+                    │  + CustomFPN    │ │  + CustomFPN    │
+                    └──────────┬──────┘ └────────┬────────┘
+                               │                  │
+                    ┌──────────▼──────┐ ┌────────▼────────┐
+                    │ SemanticInjector│ │ SemanticInjector│  ← PriorOcc 保留
+                    │ (SegHead+Fusion)│ │ (SegHead+Fusion)│
+                    └──────┬────┬─────┘ └────┬───┬────────┘
+                           │    │            │   │
+                    seg_logits  │     seg_logits │
+                           │    │            │   │
+                    ┌──────▼────▼──┐ ┌───────▼───▼─────┐
+                    │View Transform│ │  View Transform  │  ← +SGDM 语义门控
+                    │  + DepthNet  │ │  + DepthNet      │
+                    └──────┬───────┘ └───────┬─────────┘
+                           │                 │
+                    ┌──────▼─────┐   ┌──────▼──────┐
+                    │ BEV Feat t │   │ BEV Feat t-1│
+                    └──────┬─────┘   └──────┬──────┘
+                           │                │
+                           │   ┌────────────┘
+                           │   │
+                    ┌──────▼───▼───────────┐
+                    │  Temporal Fusion      │  ← 模块 1: 新增
+                    │  (Ego-Motion Warp +   │
+                    │   Temporal Attention) │
+                    └──────────┬────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │  FlowInjector       │  ← 模块 2: 新增（核心创新）
+                    │  (Semantic-Guided   │
+                    │   Cost Volume +     │
+                    │   Flow Head)        │
+                    └────┬──────────┬─────┘
+                         │          │
+                ┌────────▼──┐  ┌────▼──────────────┐
+                │ Shared    │  │ Scene Flow Head   │  ← 模块 3: 新增
+                │ Decoder   │  │ (Cls+Reg Hybrid)  │
+                └────┬──────┘  └────┬──────────────┘
+                     │              │
+              ┌──────▼──────┐ ┌────▼──────────┐
+              │ Occ Head    │ │ Flow Output   │
+              │ (BEVOCCHead2D)│ │ (vx, vy per   │
+              │ → 3D Occ    │ │  voxel)        │
+              └─────────────┘ └───────────────┘
+```
+
+---
+
+### 模块 1：时序融合模块（Temporal Fusion）
+
+#### 功能
+将 PriorOcc 从单帧扩展为多帧输入，利用历史帧的 BEV 特征增强当前帧的占用和流预测。核心是 ego-motion 补偿 + 时序注意力。
+
+#### 架构设计
+
+```
+BEV Feature t   ─────────────────────────────────┐
+                                                 │
+BEV Feature t-1 → Ego-Motion Warp ─→ BEV t-1' ──┤
+                                                 │
+                                    ┌────────────▼────────────┐
+                                    │  Temporal Cross-Attention│
+                                    │  Q = BEV_t               │
+                                    │  K,V = [BEV_t, BEV_t-1'] │
+                                    │  (Deformable Attention)  │
+                                    └────────────┬────────────┘
+                                                 │
+                                          Fused BEV Feature
+```
+
+#### 实现方法
+
+**1. Ego-Motion 补偿：**
+- 使用 nuScenes 提供的相邻帧 ego-pose 差异矩阵 `T_t^{t-1}`
+- 将历史 BEV 特征 warp 到当前帧坐标系：
+  ```
+  BEV_{t-1}' = Warp(BEV_{t-1}, T_t^{t-1})
+  ```
+- 实现为可微的双线性采样：对 BEV grid 的每个位置 `(x, y)`，根据 ego-pose 变换找到历史帧中的对应位置，进行双线性插值采样
+- 参考实现：BEVFormer 的 temporal self-attention，GDFusion 的旋转矩阵 + 学习位移
+
+**2. 时序注意力融合：**
+- **方案 A（推荐）：Deformable Temporal Attention**
+  - Query: 当前帧 BEV 特征
+  - Key/Value: [当前帧, warp 后的历史帧]
+  - 使用 deformable attention（参考 BEVFormer），每个 query 只关注少量可学习的采样点，降低计算量
+  - 4 层 transformer encoder
+
+- **方案 B（轻量替代）：BEV 通道拼接 + Conv**
+  - `Concat[BEV_t, BEV_{t-1}'] → Conv2d(2C→C) → BN → ReLU`
+  - 更简单但表达力弱于 attention
+
+**3. 历史帧数量：**
+- 初始版本使用 2 帧（t 和 t-1），与 ALOcc/FMOcc 一致
+- 可扩展至 4-8 帧（参考 ViewFormer 的 streaming buffer）
+
+#### 关键代码文件
+- 新增 `projects/mmdet3d_plugin/models/model_utils/temporal_fusion.py`
+- 修改 `models/detectors/bevdet_occ.py` 的 `extract_feat()` 支持多帧输入
+
+#### 预期成果
+- 单帧 → 双帧时序融合，mIoU 预期提升 1-2 个点（参考 FlashOCC 单帧→多帧的提升幅度）
+- 为场景流预测提供必要的时序对应关系
+- 远距离区域和遮挡区域的稳定性提升
+
+---
+
+### 模块 2：语义引导的场景流注入器（Semantic-Guided FlowInjector）
+
+#### 功能
+**这是 FlowOcc 的核心创新模块。** 复用 PriorOcc 的 2D 语义先验来引导场景流预测。语义信息帮助模型区分动态/静态区域，指导 cost volume 的构建，从而提升流预测精度。
+
+#### 设计动机
+- 不同语义类别有不同运动模式：车辆有平移/转向，行人有步行轨迹，静态物体 flow≈0
+- 2D 语义图能提供密集的运动区域 mask，引导 flow 分支聚焦动态区域
+- 语义边界往往是 flow 边界（运动不连续处）
+- **现有工作（ALOcc、STCOcc、VoxelSplat 等）均未利用 2D 语义先验引导流预测**，这是 FlowOcc 的差异化贡献
+
+#### 架构设计
+
+```
+                    ┌──────────────────────────┐
+  seg_logits (t) ──→│  Semantic Motion Prior   │
+  seg_logits (t-1)→ │  Generator               │
+                    │                          │
+                    │ 1. Softmax → sem_prob    │
+                    │ 2. 动态类别概率:          │
+                    │    P_dyn = Σ P(class_i)  │
+                    │    i ∈ {car, ped, ...}   │
+                    │ 3. 投影到 BEV 空间        │
+                    └──────────┬───────────────┘
+                               │
+                               │  motion_attention (B, 1, Dy, Dx)
+                               │
+                    ┌──────────▼───────────────┐
+  Fused BEV t ─────→│  Semantic-Guided         │
+  Warped BEV t-1 ──→│  Cost Volume             │
+                    │                          │
+                    │ 1. 局部搜索窗口内计算      │
+                    │    cosine similarity      │
+                    │ 2. 用 motion_attention    │
+                    │    加权 cost volume       │
+                    │ 3. 输出 cost volume       │
+                    └──────────┬───────────────┘
+                               │
+                               │  cost_volume (B, K, Dy, Dx)
+                               │
+                    ┌──────────▼───────────────┐
+                    │  Flow Head               │
+                    │  Input: cat[BEV_t, cv]   │
+                    │  → Conv → Cls + Reg      │
+                    └──────────┬───────────────┘
+                               │
+                        flow_pred (B, 2, Dy, Dx)  # vx, vy
+```
+
+#### 实现方法
+
+**1. Semantic Motion Prior Generator**
+
+从 SemanticInjector 输出的 `seg_logits` 生成运动先验：
+
+```python
+class SemanticMotionPrior(nn.Module):
+    def __init__(self, num_classes=17, dynamic_classes=[2,3,4,5,6,7,8,9,10]):
+        # dynamic_classes = [bicycle, bus, car, construction_vehicle,
+        #                    motorcycle, pedestrian, traffic_cone, trailer, truck]
+        self.dynamic_weight = nn.Parameter(torch.ones(len(dynamic_classes)))
+    
+    def forward(self, seg_logits_t, seg_logits_t1, bev_shape):
+        # 1. Softmax 得到语义概率
+        prob_t = F.softmax(seg_logits_t, dim=1)  # (B*N, 17, H, W)
+        
+        # 2. 动态类别概率（可学习权重）
+        dyn_prob = sum(prob_t[:, c] * w for c, w in 
+                       zip(self.dynamic_classes, self.dynamic_weight))
+        # dyn_prob: (B*N, H, W) — 每个像素的动态概率
+        
+        # 3. 投影到 BEV 空间（通过 view transform 的深度加权）
+        # 复用 LSS 的 frustum + depth 实现投影
+        motion_prior_bev = project_to_bev(dyn_prob, depth, frustum)
+        # motion_prior_bev: (B, 1, Dy, Dx)
+        
+        return motion_prior_bev
+```
+
+**2. Semantic-Guided BEV Cost Volume**
+
+参考 ALOcc 的 BEV cost volume，但加入语义引导：
+
+```python
+class SemanticGuidedCostVolume(nn.Module):
+    def __init__(self, search_range=5, num_bins=8):
+        self.search_range = search_range  # 搜索半径（体素数）
+        self.offsets = self._build_offsets(search_range)  # 2D 偏移量列表
+    
+    def forward(self, bev_t, bev_t1_warped, motion_prior):
+        # bev_t: (B, C, Dy, Dx) — 当前帧 BEV 特征
+        # bev_t1_warped: (B, C, Dy, Dx) — ego-motion 补偿后的历史帧
+        # motion_prior: (B, 1, Dy, Dx) — 语义运动先验
+        
+        cost_volume = []
+        for offset in self.offsets:
+            # 对每个偏移量，计算 cosine similarity
+            shifted_t1 = spatial_shift(bev_t1_warped, offset)
+            sim = F.cosine_similarity(bev_t, shifted_t1, dim=1)  # (B, Dy, Dx)
+            
+            # 语义引导：动态区域增强 cost volume 响应
+            sim = sim * (1.0 + motion_prior.squeeze(1))  # 动态区域权重更高
+            
+            cost_volume.append(sim)
+        
+        cost_volume = torch.stack(cost_volume, dim=1)  # (B, K, Dy, Dx)
+        return cost_volume
+```
+
+**3. Flow Head（分类-回归混合）**
+
+参考 ALOcc 的 hybrid 方案：
+
+```python
+class FlowHead(nn.Module):
+    def __init__(self, in_channels, num_bins=8):
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+        )
+        # 分类分支：预测每个 bin 的概率
+        self.cls_head = nn.Conv2d(128, num_bins * 2, 1)  # 2D flow → 2*num_bins
+        # 回归分支：预测残差
+        self.reg_head = nn.Conv2d(128, 2, 1)  # vx, vy 残差
+    
+    def forward(self, bev_feat, cost_volume):
+        x = torch.cat([bev_feat, cost_volume], dim=1)
+        x = self.conv(x)
+        
+        cls_logits = self.cls_head(x)  # (B, num_bins*2, Dy, Dx)
+        reg_residual = self.reg_head(x)  # (B, 2, Dy, Dx)
+        
+        # 分类概率 → 连续 flow（期望值）
+        bin_centers = self.bin_centers  # 预定义的 bin 中心
+        prob = F.softmax(cls_logits.view(B, 2, num_bins, Dy, Dx), dim=2)
+        flow_cls = (prob * bin_centers.view(1, 2, num_bins, 1, 1)).sum(dim=2)
+        
+        # 最终 flow = 分类期望 + 回归残差
+        flow_pred = flow_cls + reg_residual
+        return flow_pred, cls_logits
+```
+
+#### 关键代码文件
+- 新增 `projects/mmdet3d_plugin/models/model_utils/flow_injector.py`（含 SemanticMotionPrior + SemanticGuidedCostVolume + FlowHead）
+
+#### 预期成果
+- **核心贡献：** 证明 2D 语义先验能有效引导 3D 场景流预测
+- 预期 mAVE 降低 5-10%（相比无语义引导的 cost volume）
+- 动态类别（car, pedestrian 等）的流预测精度提升最明显
+- 静态区域的流预测更接近 0（语义先验抑制静态区域的虚假运动）
+
+---
+
+### 模块 3：场景流预测头与解码器（Scene Flow Head & Shared Decoder）
+
+#### 功能
+将融合后的 BEV 特征分别送入占用预测头和场景流预测头，实现多任务输出。占用头复用 PriorOcc 的 BEVOCCHead2D，流预测头新增。
+
+#### 架构设计
+
+```
+            Fused BEV Feature
+                   │
+         ┌─────────┴─────────┐
+         │                   │
+  ┌──────▼──────┐    ┌──────▼──────────────┐
+  │ Occ Decoder │    │ Flow Decoder        │
+  │ (Shared)    │    │ (Shared + Specific) │
+  │             │    │                     │
+  │ final_conv  │    │ flow_conv           │
+  │ → predicter │    │ → FlowHead          │
+  │ → 3D Occ    │    │ → 2D Flow (vx,vy)   │
+  └─────────────┘    └─────────────────────┘
+```
+
+#### 实现方法
+
+**1. 共享解码器 + 独立头（推荐方案）：**
+
+```python
+class FlowOccHead(nn.Module):
+    def __init__(self, ...):
+        # 复用 PriorOcc 的占用头
+        self.occ_head = BEVOCCHead2D(...)  # 不变
+        
+        # 新增流预测头
+        self.flow_conv = nn.Sequential(
+            nn.Conv2d(C, C, 3, padding=1),
+            nn.BatchNorm2d(C),
+            nn.ReLU(),
+        )
+        self.flow_head = FlowHead(C, num_bins=8)
+    
+    def forward(self, fused_bev, cost_volume, motion_prior):
+        # 占用预测（复用 PriorOcc）
+        occ_pred = self.occ_head(fused_bev)
+        
+        # 流预测
+        flow_feat = self.flow_conv(fused_bev)
+        flow_pred, flow_cls = self.flow_head(flow_feat, cost_volume)
+        
+        return occ_pred, flow_pred, flow_cls
+```
+
+**2. Flow-to-Semantic 交互精炼（可选增强）：**
+
+用流信息反哺语义预测——运动信息帮助区分动态/静态物体：
+```python
+# flow_feat 包含运动信息，通过 cross-attention 精炼占用预测
+occ_refined = occ_head(fused_bev + flow_gate * flow_feat)
+# flow_gate = sigmoid(Conv(flow_feat))
+```
+
+#### 关键代码文件
+- 修改 `models/dense_heads/bev_occ_head.py`，新增 FlowOccHead 类
+- 或新增 `models/dense_heads/flow_occ_head.py`
+
+#### 预期成果
+- 联合预测占用和流，不显著增加推理延迟（<5ms 额外开销）
+- Flow-to-Semantic 交互可额外提升动态类别的 mIoU
+- 占用和流互相正则化，减少过拟合
+
+---
+
+### 模块 4：损失函数设计
+
+#### 总损失
+
+```
+L_total = L_occ + λ_2d * L_2d_seg + λ_flow * L_flow + λ_aux * L_aux
+```
+
+#### 各损失详解
+
+**1. L_occ（3D 占用损失，复用 PriorOcc）：**
+- CrossEntropy + class balance weights（逆对数频率）
+- 可选 Lovasz softmax loss（处理类别不平衡）
+- 权重：1.0
+
+**2. L_2d_seg（2D 语义辅助损失，复用 PriorOcc）：**
+- CrossEntropy / Focal Loss
+- 权重 λ_2d = 0.3
+
+**3. L_flow（场景流损失，新增）：**
+
+参考 ALOcc 的分类-回归混合损失：
+
+```python
+# 分类损失：交叉熵，监督 bin 索引
+L_flow_cls = CrossEntropy(flow_cls_logits, flow_bin_gt)
+
+# 回归损失：L2 + 余弦相似度
+L_flow_reg = ||flow_pred - flow_gt||_2 
+             - cos_sim(flow_pred, flow_gt)
+
+# 只在前景动态体素上计算流损失
+L_flow = L_flow_cls + L_flow_reg  # 仅对动态类别体素
+```
+
+权重 λ_flow = 0.1-0.5（需调参，参考 Cam4DOcc 用 0.05，ALOcc 用 1.0）
+
+**4. L_aux（辅助损失，新增）：**
+
+| 辅助损失 | 公式 | 作用 |
+|----------|------|------|
+| 静态正则化 | `L_static = Σ |flow_pred[static_voxels]|` | 强制静态区域 flow≈0 |
+| 语义-流边界对齐 | `L_boundary = ||∇(sem) - ∇(|flow|)||_1` | 语义边界应与流边界对齐 |
+| 运动一致性 | `L_consist = Σ Var(flow[within_instance])` | 同一实例内 flow 应一致 |
+| 2D 光流辅助 | `L_optical = ||project(flow_pred) - optical_flow_gt||_1` | 2D 光流作为弱监督 |
+
+权重 λ_aux = 0.05-0.1
+
+**5. 损失平衡策略：**
+
+推荐使用 **Uncertainty Weighting**（Kendall et al.）自动平衡多任务损失：
+```python
+L_total = Σ (1/(2*σ_i²)) * L_i + log(σ_i)
+# σ_i 为可学习的不确定性参数
+```
+
+或固定权重（初始实验用）：
+```
+L_total = 1.0 * L_occ + 0.3 * L_2d_seg + 0.2 * L_flow + 0.05 * L_aux
+```
+
+#### 关键代码文件
+- 新增 `models/losses/flow_loss.py`
+- 修改 `models/detectors/bevdet_occ.py` 的 `forward_train()` 添加流损失
+
+---
+
+## 三、指标验证体系
+
+### 3.1 占用预测指标（Occupancy Metrics）
+
+| 指标 | 定义 | 计算方式 | 现有 SOTA |
+|------|------|----------|-----------|
+| **mIoU** | 所有类别的平均交并比 | `mean(IoU_c)` for each class c | STCOcc: 44.6 (Occ3D-nus) |
+| **RayIoU** | 射线投射的占用质量 | 模拟从 ego 位置射出射线，比较预测/GT 首个被占用体素的深度误差（阈值 1m/2m/4m）和语义匹配 | ALOcc: 41.9 (OpenOcc) |
+| **IoU per class** | 每个类别的 IoU | `TP_c / (TP_c + FP_c + FN_c)` | — |
+
+**mIoU 验证方式：**
+1. 预测 `(B, 200, 200, 16, 18)` → argmax → `(B, 200, 200, 16)` 类别索引
+2. 与 GT occupancy `(B, 200, 200, 16)` 比较
+3. 若 `use_mask=True`：仅在相机可见的体素上计算（mask_camera）
+4. 18 类（17 语义 + free），逐类计算 IoU 后取平均
+
+**RayIoU 验证方式（更公平的深度评估）：**
+1. 从 ego 车辆位置发射模拟射线
+2. 记录射线与第一个被占用体素相交的深度和语义类别
+3. 预测和 GT 分别记录
+4. TP 条件：语义类别匹配 **且** 深度 L1 误差 < 阈值（1m/2m/4m）
+5. 在三个阈值上分别计算，取平均
+
+### 3.2 场景流指标（Scene Flow Metrics）
+
+| 指标 | 定义 | 计算方式 | 现有 SOTA |
+|------|------|----------|-----------|
+| **EPE** | 端点误差 | `mean(‖flow_pred - flow_gt‖_2)`，所有有效体素 | KITTI: ~4.9cm |
+| **mAVE** | 平均速度误差 | `mean(‖v_pred - v_gt‖)`，动态类别体素，单位 m/s | ALOcc: 0.556 (OpenOcc) |
+| **mAVETP** | TP 体素速度误差 | 仅在正确检测的前景体素上计算 mAVE | ALOcc: 0.481 (OpenOcc) |
+| **Acc (Strict)** | 严格准确率 | EPE < 0.05m 或相对误差 < 5% 的比例 | RAFT-3D: 83.7% (FT3D) |
+| **Acc (Relaxed)** | 宽松准确率 | EPE < 0.1m 或相对误差 < 10% 的比例 | — |
+| **Outlier Rate** | 离群率 | EPE > 0.3m 或相对误差 > 10% 的比例 | — |
+
+**EPE 验证方式：**
+1. 每个体素预测 3D 流向量 `(vx, vy, vz)`（实际中通常仅 BEV 平面 `(vx, vy)`）
+2. 与 GT 流向量比较，计算 L2 距离
+3. 在所有有效体素（非 free、非 ignore）上取平均
+
+**mAVE 验证方式（OpenOcc 标准）：**
+1. 仅在动态类别（car, truck, bus, pedestrian 等）的体素上计算
+2. 流向量转换为速度：`v = flow / Δt`（Δt 为帧间时间间隔，nuScenes 2Hz → Δt=0.5s）
+3. 计算预测速度与 GT 速度的 L1 或 L2 误差
+4. **mAVETP**：仅在 True Positive 体素上计算（即语义预测正确的动态体素）
+
+### 3.3 联合指标
+
+| 指标 | 定义 | 计算方式 |
+|------|------|----------|
+| **Occ Score** | 占用+流综合得分 | `α * RayIoU + β * (1 - mAVETP)` 的加权和 |
+| **mIoUD** | 动态类别 mIoU | 仅在动态类别上计算 mIoU |
+| **Threeway EPE** | 三段 EPE | 分别报告：前景动态、前景静态、背景静态的 EPE |
+
+### 3.4 数据集与标注生成
+
+| 数据集 | Occupancy 标注 | Flow 标注 | Flow 标注生成方式 |
+|--------|---------------|-----------|------------------|
+| **nuScenes / OpenOcc** | Occ3D 提供 200×200×16 | 需自行生成 | 从 3D bbox 轨迹计算刚体变换：前景点用物体运动，背景用 ego-motion |
+| **SemanticKITTI** | 有（19 类） | 有（KITTI Scene Flow） | KITTI 原始 scene flow 标注（CAD 模型拟合） |
+
+**nuScenes Flow 标注生成步骤：**
+```
+1. 遍历每个 3D bbox 的轨迹（nuScenes 提供 tracking）
+2. 对 bbox 内的点云点：flow = rigid_transform(bbox_t → bbox_t+1)
+3. 对 bbox 外的背景点：flow = ego_motion_transform(pose_t → pose_t+1)
+4. 将点云 flow 转换为体素 flow（体素内取均值）
+5. 输出 (200, 200, 16, 2) 的 flow GT（vx, vy）
+```
+
+### 3.5 实验设计与 Ablation
+
+| 编号 | 实验 | 目的 |
+|------|------|------|
+| E0 | PriorOcc 单帧 (baseline) | 基线对照 |
+| E1 | PriorOcc + 时序融合 (无 flow) | 时序对占用的提升 |
+| E2 | E1 + Flow branch (无语义引导) | 流分支的基础贡献 |
+| E3 | E2 + Semantic Motion Prior | **核心：语义先验对流的引导** |
+| E4 | E3 + Flow-to-Semantic 交互 | 流反哺语义 |
+| E5 | E4 + 辅助损失 (L_aux) | 辅助损失的有效性 |
+| E6 | E5 + Uncertainty Weighting | 多任务损失平衡 |
+| E7 | 不同历史帧数量 (2/4/8) | 时序长度的影响 |
+
+**预期结果表：**
+
+| 实验 | mIoU ↑ | RayIoU ↑ | mAVE ↓ | mAVETP ↓ | Occ Score ↑ |
+|------|--------|----------|--------|----------|-------------|
+| E0 (baseline) | 32.08 | — | — | — | — |
+| E1 | ~33.5 | — | — | — | — |
+| E2 | ~33.5 | ~38 | 0.60 | 0.52 | ~38 |
+| E3 | ~34.0 | ~39 | 0.55 | 0.48 | ~40 |
+| E4 | ~34.5 | ~39 | 0.55 | 0.48 | ~40 |
+| E5 | ~34.5 | ~40 | 0.52 | 0.45 | ~41 |
+| E6 (full) | ~35.0 | ~40 | 0.50 | 0.44 | ~42 |
+
+---
+
+## 四、实现路线图
+
+### 阶段 1：基础设施（2-3 周）
+1. 克隆 PriorOcc 代码，搭建训练环境
+2. 生成 nuScenes flow 标注（从 bbox 轨迹）
+3. 实现多帧数据加载 pipeline
+4. 验证单帧 baseline 复现 mIoU=32.08
+
+### 阶段 2：时序融合（2 周）
+5. 实现 ego-motion warp 模块
+6. 实现时序注意力融合
+7. 验证 E1：时序融合对 mIoU 的提升
+
+### 阶段 3：场景流分支（3-4 周）
+8. 实现 SemanticMotionPrior 模块
+9. 实现 SemanticGuidedCostVolume
+10. 实现 FlowHead（分类-回归混合）
+11. 实现 flow loss
+12. 验证 E2-E3：流预测 + 语义引导
+
+### 阶段 4：优化与消融（2-3 周）
+13. 实现 Flow-to-Semantic 交互
+14. 实现辅助损失
+15. 运行完整 ablation (E0-E7)
+16. 调参优化
+
+### 阶段 5：论文撰写（2-3 周）
+17. 整理实验结果
+18. 撰写论文初稿
+
+**总计：约 11-15 周**
+
+---
+
+## 五、关键参考文献
+
+| 论文 | 会议 | 与本方案的关系 |
+|------|------|---------------|
+| ALOcc | ICCV 2025 | BEV cost volume + 分类回归流预测的主要参考 |
+| STCOcc | CVPR 2025 | 稀疏级联时空解码器 + 流 L1 损失参考 |
+| Let Occ Flow | ICLR 2025 | 自监督流 + 可微渲染 + 静态正则化参考 |
+| VoxelSplat | CVPR 2025 | 语义引导高斯运动的思路参考 |
+| Cam4DOcc | CVPR 2024 | 4D 占用预测 benchmark + 损失权重参考 |
+| GDFusion | CVPR 2025 | 时序融合（梯度下降视角）参考 |
+| CVT-Occ | ECCV 2024 | Cost volume 时序融合参考 |
+| ViewFormer | ECCV 2024 | Streaming temporal attention 参考 |
+| RAFT | ECCV 2020 | Cost volume + GRU 迭代更新基础架构 |
+| SparseOcc | ECCV 2024 | RayIoU 指标定义 |
+| PriorOcc (ours) | — | 基础框架，SemanticInjector 来源 |
+| FlashOCC | — | C2H 解码器 + LSS view transform 基础 |
+
+---
+
+## 六、验证方式总结
+
+本方案的验证分为三个层次：
+
+1. **占用指标验证：** mIoU（体素级 IoU）+ RayIoU（射线级深度质量），在 Occ3D-nuScenes / OpenOcc 上评测
+2. **场景流指标验证：** EPE（端点误差）+ mAVE/mAVETP（速度误差），在 OpenOcc flow benchmark 上评测
+3. **联合指标验证：** Occ Score（RayIoU + mAVETP 加权和），综合评估占用和流的联合性能
+
+所有指标的 GT 标注均可从 nuScenes 的 3D bbox 轨迹和 ego-pose 自动生成，无需额外人工标注。
