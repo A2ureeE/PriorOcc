@@ -645,3 +645,761 @@ L_total = 1.0 * L_occ + 0.3 * L_2d_seg + 0.2 * L_flow + 0.05 * L_aux
 3. **联合指标验证：** Occ Score（RayIoU + mAVETP 加权和），综合评估占用和流的联合性能
 
 所有指标的 GT 标注均可从 nuScenes 的 3D bbox 轨迹和 ego-pose 自动生成，无需额外人工标注。
+
+
+# PriorOcc-4D：基于 2D 语义先验的 4D 占用预测研究方案
+
+## Context
+
+PriorOcc 基于 FlashOCC，通过 SemanticInjector 在 backbone 后注入 2D 语义先验，将单帧 3D 占用预测 mIoU 提升至 32.08。本方案将 PriorOcc 扩展为 **PriorOcc-4D**：在保留语义先验注入的基础上，引入时序输入和未来帧预测，实现 **4D 占用预测（4D Occupancy Forecasting）**——给定历史帧观测，预测未来 1-3 秒的 3D 语义占用网格。
+
+**核心创新：** 用 2D 语义先验识别动态/静态区域，解耦预测——静态区域直接 warp，动态区域用语义引导的时序注意力预测未来。
+
+**交付物：** 将完整方案保存为 `~/Desktop/PriorOcc-4D_研究方案.md`
+
+---
+
+## 一、4D Occupancy Forecasting 领域现状
+
+### 1.1 SOTA 方法与指标
+
+评测协议：给定历史帧（通常 2-3 帧 @ 2Hz），预测未来 1s/2s/3s 的占用网格，报告每个时间步的 mIoU/IoU。
+
+| 方法 | 会议 | 架构 | 1s mIoU | 2s mIoU | 3s mIoU | Avg mIoU |
+|------|------|------|---------|---------|---------|----------|
+| **T3Former** | 2025 | Triplane delta 自回归 Transformer | 46.32 | 33.23 | 28.73 | **36.09** |
+| **DOME** | 2024 | Latent diffusion Transformer | 35.11 | 25.89 | 20.29 | 27.10 |
+| **OccWorld** | ECCV 2024 | VQ tokenizer + GPT 式自回归 | 25.78 | 15.14 | 10.51 | 17.14 |
+| **FSF-Net** | 2024 | VQ-Mamba + BEV flow warp | 42.38 | — | 17.03 | — |
+| **Cam4DOcc OCFNet†** | CVPR 2024 | 端到端时空网络 | 29.36 IoU | 28.30 | 27.44 | 26.82 |
+
+### 1.2 关键发现
+
+1. **PriorOcc 起点与 SOTA 的差距比 flow 方向小得多**
+   - PriorOcc 单帧 mIoU = 32.08
+   - T3Former 未来 1s mIoU = 46.32（但用的是 GT 输入，非相机感知）
+   - Cam4DOcc OCFNet†（相机输入）1s IoU = 29.36
+   - **PriorOcc 的单帧性能已经接近 Cam4DOcc baseline 的未来帧性能**
+
+2. **FlashOCC 原生支持时序输入**——无需从零搭建多帧 pipeline
+   - 已有 `flashocc-r50-4d-stereo.py`、`depth4d-longterm8f.py` 等配置
+   - 时序融合通过 ego-motion 补偿 + BEV 对齐实现，成熟稳定
+
+3. **未来占用标签已有现成 benchmark**
+   - Cam4DOcc（CVPR 2024）提供完整的 4D 预测评测协议
+   - 未来标签从 nuScenes 的 3D bbox 轨迹 + ego-pose 生成，**无需自行制作 flow 标签**
+
+4. **语义先验用于 4D 预测的空白**
+   - Cam4DOcc 用语义区分 movable/static 类别，但不做特征注入
+   - Spatio-Temporal 2D-3D Interaction 用 SAM 标签做重 2D-3D 交叉注意力
+   - **无人用轻量 SemanticInjector 式模块做 4D 预测**——这是 PriorOcc-4D 的差异化定位
+
+---
+
+## 二、PriorOcc-4D 各模块功能架构详解
+
+### 整体架构图
+
+```
+          ┌──────────────────────────────────────────────────────┐
+          │         Historical Frames (t-2, t-1, t)              │
+          └──────┬──────────────┬──────────────┬─────────────────┘
+                 │              │              │
+          ┌──────▼──────┐ ┌────▼─────┐ ┌──────▼──────┐
+          │ Backbone    │ │ Backbone │ │ Backbone    │
+          │ + FPN       │ │ + FPN    │ │ + FPN       │
+          └──────┬──────┘ └────┬─────┘ └──────┬──────┘
+                 │              │              │
+          ┌──────▼──────┐ ┌────▼─────┐ ┌──────▼──────┐
+          │SemanticInj  │ │SemanticInj│ │SemanticInj │  ← PriorOcc 保留
+          │(SegHead     │ │(SegHead  │ │(SegHead    │
+          │ +Fusion)    │ │ +Fusion) │ │ +Fusion)   │
+          └──┬────┬─────┘ └──┬──┬───┘ └──┬────┬─────┘
+             │    │          │  │        │    │
+       seg_log  feat     seg_log feat  seg_log feat
+             │    │          │  │        │    │
+          ┌──▼────▼──┐ ┌────▼──▼───┐ ┌──▼────▼────┐
+          │ViewTransf │ │ViewTransf│ │ViewTransf  │  ← +SGDM
+          │+DepthNet  │ │+DepthNet │ │+DepthNet   │
+          └──────┬────┘ └────┬─────┘ └─────┬──────┘
+                 │           │              │
+             BEV t-2     BEV t-1        BEV t
+                 │           │              │
+                 │   ┌───────┘              │
+                 │   │  ┌───────────────────┘
+          ┌──────▼───▼──▼───────────────────────┐
+          │     模块 1: 时序 BEV 融合            │
+          │  (Ego-Motion Warp + BEV Align)      │  ← FlashOCC 原生支持
+          └──────────────┬──────────────────────┘
+                         │
+                   Fused BEV Feature
+                         │
+          ┌──────────────▼──────────────────────┐
+          │     模块 2: 语义引导的动静态解耦      │  ← 核心创新
+          │  (Semantic Dynamic-Static Decoder)  │
+          │                                     │
+          │  seg_logits → 动态/静态 mask         │
+          │  静态: warp current occ → future    │
+          │  动态: temporal attention → future  │
+          └──────────────┬──────────────────────┘
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+       ┌──────▼──────┐      ┌──────▼──────────────┐
+       │ 模块 3:     │      │ 模块 4:             │
+       │ 未来占用    │      │ 未来语义辅助        │
+       │ 预测头      │      │ (Future Sem Head)   │
+       │ (Future Occ │      │                     │
+       │  Head)      │      │ 预测未来 2D 语义图   │
+       │             │      │ 作为正则化           │
+       │ 自回归/直接 │      │                     │
+       │ 多步预测    │      │                     │
+       └──────┬──────┘      └──────────┬──────────┘
+              │                        │
+       Future 3D Occ            Future 2D Sem
+      (t+1, t+2, t+3)          (auxiliary loss)
+```
+
+---
+
+### 模块 1：时序 BEV 融合（Temporal BEV Fusion）
+
+#### 功能
+将 PriorOcc 从单帧扩展为多帧输入。利用 FlashOCC **已有的时序支持**，将历史帧 BEV 特征 ego-motion 补偿后与当前帧对齐融合，为未来预测提供时序上下文。
+
+#### 架构设计
+
+```
+BEV t-2 ──→ Ego-Motion Warp ──→ BEV t-2' ─┐
+BEV t-1 ──→ Ego-Motion Warp ──→ BEV t-1' ─┤
+BEV t   ───────────────────────────────── ─┤
+                                           │
+                            ┌──────────────▼──────────────┐
+                            │  BEV Align & Concat         │
+                            │  Concat[BEV_t, BEV_t-1',    │
+                            │         BEV_t-2']           │
+                            │  → Conv2d(3C→C) → BN → ReLU │
+                            └──────────────┬──────────────┘
+                                           │
+                                    Fused BEV (B, C, 200, 200)
+```
+
+#### 实现方法
+
+**1. 直接复用 FlashOCC 的时序配置：**
+- FlashOCC 已提供 `flashocc-r50-4d-stereo.py` 和 `depth4d-longterm8f.py`
+- 时序融合机制：ego-motion 补偿 + BEV 对齐拼接（mono-align-concat）
+- **PriorOcc 的 SemanticInjector 是逐帧处理的，天然兼容多帧输入**——每帧图像过 backbone → SemanticInjector → View Transform → BEV，然后多帧 BEV 做对齐融合
+
+**2. Ego-Motion 补偿：**
+- 使用 nuScenes 提供的相邻帧 ego-pose 差异矩阵
+- 将历史 BEV 特征 warp 到当前帧坐标系：`BEV_{t-k}' = Warp(BEV_{t-k}, T_t^{t-k})`
+- 实现：可微双线性采样（`F.grid_sample`）
+
+**3. 融合策略：**
+- **方案 A（推荐，简单高效）：通道拼接 + Conv**
+  ```
+  Fused = Conv2d(Concat[BEV_t, BEV_t-1', BEV_t-2'], 3C→C)
+  ```
+- **方案 B（更强但复杂）：Deformable Temporal Attention**
+  - 参考 BEVFormer 的 temporal self-attention
+  - Query = BEV_t, Key/Value = [BEV_t, BEV_t-1', BEV_t-2']
+
+**4. 历史帧数量：**
+- 初始版本用 3 帧（t-2, t-1, t），与 Cam4DOcc/OccWorld 一致
+- FlashOCC 的 longterm8f 配置支持 8 帧，可后续扩展
+
+#### 关键代码文件
+- 修改 `projects/configs/` 下的配置文件，切换到 4D 时序配置
+- `models/detectors/bevdet_occ.py` 的 `extract_feat()` 已支持 `prev_bev`（FlashOCC 原生）
+- 新增 `projects/mmdet3d_plugin/models/model_utils/temporal_fusion.py`（如需自定义融合）
+
+#### 预期成果
+- **零成本获得时序能力**——FlashOCC 原生支持，主要是配置切换
+- 单帧 → 3 帧时序，当前帧 mIoU 预期提升 1-2 点（~33-34）
+- 为未来预测提供时序上下文基础
+- **与 flow 方向相比，这是最大的简化**——无需从零搭建多帧 pipeline
+
+---
+
+### 模块 2：语义引导的动静态解耦预测（Semantic Dynamic-Static Decoder）
+
+#### 功能
+**这是 PriorOcc-4D 的核心创新模块。** 利用 SemanticInjector 输出的 2D 语义先验，将未来预测解耦为两个子问题：
+- **静态区域**（road, building, vegetation 等）：直接 warp 当前占用到未来（ego-motion 补偿后几乎不变）
+- **动态区域**（car, pedestrian, bicycle 等）：用语义引导的时序注意力预测未来位置
+
+#### 设计动机
+1. **静态占未来 ≈ 当前**——Cam4DOcc 的 static baseline（直接复制当前帧）在 GSO 上 IoU 不低
+2. **动态物体是预测难点**——需要运动推理，但只占体素的一小部分
+3. **语义先验天然区分动静**——SemanticInjector 的 seg_logits 已经告诉我们哪些是动态类别
+4. **解耦后计算更高效**——只需对动态区域做复杂预测，静态区域直接 warp
+
+#### 架构设计
+
+```
+                    ┌────────────────────────────────┐
+  seg_logits (t) ──→│  Semantic Dynamic-Static       │
+                    │  Separator                     │
+                    │                                │
+                    │  1. Softmax → sem_prob         │
+                    │  2. 动态 mask:                  │
+                    │     M_dyn = Σ P(class_i)       │
+                    │     i ∈ {car, ped, bicycle...} │
+                    │  3. 静态 mask:                  │
+                    │     M_sta = 1 - M_dyn          │
+                    │  4. 投影到 BEV 空间              │
+                    └───────┬────────────┬───────────┘
+                            │            │
+                     M_dyn_bev      M_sta_bev
+                     (B,1,Dy,Dx)    (B,1,Dy,Dx)
+                            │            │
+              ┌─────────────▼──┐  ┌──────▼──────────────┐
+              │ 动态预测分支    │  │ 静态预测分支         │
+              │                │  │                     │
+              │ Fused BEV      │  │ Current Occ (t)     │
+              │ → Temporal     │  │ → Ego-Motion Warp   │
+              │   Attention    │  │   to future         │
+              │ → Dynamic      │  │ → Static Occ        │
+              │   Future Pred  │  │   (t+1, t+2, t+3)  │
+              └───────┬────────┘  └──────────┬──────────┘
+                      │                      │
+                      │    ┌─────────────────┘
+                      │    │
+              ┌───────▼────▼──────────────────┐
+              │  Semantic-Guided Combiner     │
+              │                               │
+              │  Future Occ = M_dyn * Dyn_Pred│
+              │             + M_sta * Sta_Pred│
+              └───────────────┬───────────────┘
+                              │
+                    Future 3D Occupancy
+                   (t+1, t+2, t+3)
+```
+
+#### 实现方法
+
+**1. Semantic Dynamic-Static Separator**
+
+从 SemanticInjector 的 seg_logits 生成动态/静态 mask：
+
+```python
+class SemanticDynStaSeparator(nn.Module):
+    def __init__(self, num_classes=17,
+                 dynamic_classes=[2,3,4,5,6,7,8,9,10]):
+        # dynamic_classes = [bicycle, bus, car, construction_vehicle,
+        #                    motorcycle, pedestrian, traffic_cone, trailer, truck]
+        self.dynamic_weight = nn.Parameter(torch.ones(len(dynamic_classes)))
+        self.proj_to_bev = nn.Conv2d(num_classes, 1, 1)  # 投影到 BEV
+
+    def forward(self, seg_logits, depth, frustum):
+        # seg_logits: (B*N, 17, H, W) — SemanticInjector 输出
+        prob = F.softmax(seg_logits, dim=1)
+
+        # 动态概率（可学习权重）
+        dyn_prob_2d = sum(prob[:, c] * w for c, w in
+                          zip(self.dynamic_classes, self.dynamic_weight))
+        # dyn_prob_2d: (B*N, H, W)
+
+        # 投影到 BEV 空间（复用 LSS 的 frustum + depth 加权池化）
+        dyn_mask_bev = project_to_bev(dyn_prob_2d, depth, frustum)
+        sta_mask_bev = 1.0 - dyn_mask_bev
+
+        return dyn_mask_bev, sta_mask_bev  # (B, 1, Dy, Dx) each
+```
+
+**2. 动态预测分支（Semantic-Guided Temporal Attention）**
+
+```python
+class DynamicFuturePredictor(nn.Module):
+    def __init__(self, bev_channels=64, num_future=3, num_heads=4):
+        self.temporal_attn = nn.MultiheadAttention(
+            bev_channels, num_heads, batch_first=True)
+        self.future_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bev_channels, bev_channels, 3, padding=1),
+                nn.BatchNorm2d(bev_channels),
+                nn.ReLU(),
+                nn.Conv2d(bev_channels, bev_channels, 1),
+            ) for _ in range(num_future)
+        ])
+
+    def forward(self, fused_bev, dyn_mask):
+        # fused_bev: (B, C, Dy, Dx)
+        # dyn_mask: (B, 1, Dy, Dx)
+
+        # 用动态 mask 加权特征（聚焦动态区域）
+        dyn_feat = fused_bev * dyn_mask  # (B, C, Dy, Dx)
+
+        # 展平为序列做 temporal attention
+        B, C, Dy, Dx = dyn_feat.shape
+        seq = dyn_feat.flatten(2).transpose(1, 2)  # (B, Dy*Dx, C)
+        attn_out, _ = self.temporal_attn(seq, seq, seq)
+        attn_out = attn_out.transpose(1, 2).view(B, C, Dy, Dx)
+
+        # 多步未来预测
+        future_preds = []
+        for head in self.future_heads:
+            future_preds.append(head(attn_out))  # (B, C, Dy, Dx)
+
+        return future_preds  # list of (B, C, Dy, Dx), len=num_future
+```
+
+**3. 静态预测分支（Ego-Motion Warp）**
+
+```python
+class StaticFuturePredictor(nn.Module):
+    def forward(self, current_occ_bev, future_ego_poses):
+        # current_occ_bev: (B, C, Dy, Dx) — 当前帧 BEV 特征
+        # future_ego_poses: list of (4, 4) 变换矩阵
+
+        future_static = []
+        for pose in future_ego_poses:
+            # 将当前 BEV warp 到未来 ego 坐标系
+            warped = warp_bev(current_occ_bev, pose)
+            future_static.append(warped)
+
+        return future_static  # list of (B, C, Dy, Dx)
+```
+
+**4. Semantic-Guided Combiner**
+
+```python
+class SemanticCombiner(nn.Module):
+    def forward(self, dyn_preds, sta_preds, dyn_mask, sta_mask, occ_head):
+        future_occs = []
+        for dyn_p, sta_p in zip(dyn_preds, sta_preds):
+            # 语义引导的组合：动态区域用动态预测，静态区域用静态预测
+            combined = dyn_p * dyn_mask + sta_p * sta_mask
+            # 通过占用头生成 3D 占用
+            occ = occ_head(combined)  # (B, 200, 200, 16, 18)
+            future_occs.append(occ)
+
+        return future_occs  # list of (B, Dx, Dy, Dz, num_classes)
+```
+
+#### 关键代码文件
+- 新增 `projects/mmdet3d_plugin/models/model_utils/dyn_sta_decoder.py`（含 Separator + DynamicPredictor + StaticPredictor + Combiner）
+- 修改 `models/detectors/bevdet_occ.py` 集成新模块
+
+#### 预期成果
+- **核心贡献：** 证明语义先验可以通过动静态解耦显著提升 4D 预测效率和质量
+- 静态区域零计算成本（直接 warp），动态区域聚焦计算
+- 预期未来 1s mIoU 比 Cam4DOcc OCFNet† 提升 2-5 点
+- 动态物体（GMO）的预测精度提升最明显
+- 计算量比全场景 temporal attention 降低 30-50%（仅动态区域做复杂预测）
+
+---
+
+### 模块 3：未来占用预测头（Future Occupancy Head）
+
+#### 功能
+将融合的 BEV 特征转换为未来各时间步的 3D 语义占用网格。复用 PriorOcc 的 BEVOCCHead2D（Channel-to-Height），支持自回归和直接多步两种预测模式。
+
+#### 架构设计
+
+```
+              ┌─────────────────────────────────────┐
+              │         预测模式选择                 │
+              └──────────┬──────────┬───────────────┘
+                         │          │
+              ┌──────────▼──┐  ┌────▼──────────────┐
+              │ 自回归模式   │  │ 直接多步模式       │
+              │ (推荐)      │  │ (更简单)           │
+              │             │  │                   │
+              │ Pred t+1    │  │ Pred t+1,t+2,t+3 │
+              │ → feed back │  │ 同时输出           │
+              │ → Pred t+2  │  │ (共享 encoder     │
+              │ → feed back │  │  + 多头输出)       │
+              │ → Pred t+3  │  │                   │
+              └──────┬──────┘  └────────┬──────────┘
+                     │                  │
+                     └────────┬─────────┘
+                              │
+                    ┌─────────▼─────────┐
+                    │ BEVOCCHead2D      │
+                    │ (C2H 解码器)      │  ← PriorOcc 复用
+                    │ → 3D Occ          │
+                    │ (200×200×16×18)   │
+                    └───────────────────┘
+```
+
+#### 实现方法
+
+**1. 自回归预测（推荐，参考 Drive-OccWorld）：**
+
+```python
+class AutoregressiveFutureHead(nn.Module):
+    def __init__(self, bev_channels=64, num_classes=18, dz=16):
+        self.feature_refiner = nn.Sequential(
+            nn.Conv2d(bev_channels, bev_channels, 3, padding=1),
+            nn.BatchNorm2d(bev_channels),
+            nn.ReLU(),
+        )
+        self.occ_head = BEVOCCHead2D(...)  # 复用 PriorOcc
+
+    def forward(self, fused_bev, num_future=3):
+        future_occs = []
+        feat = fused_bev
+
+        for step in range(num_future):
+            feat = self.feature_refiner(feat)
+            occ = self.occ_head(feat)  # (B, 200, 200, 16, 18)
+            future_occs.append(occ)
+
+            # 将预测的 occ 反馈为下一步输入（通过特征级反馈）
+            feat = feat + self.feedback_proj(occ_to_feat(occ))
+
+        return future_occs  # list of 3D occ, len=num_future
+```
+
+**2. 直接多步预测（更简单，参考 Cam4DOcc OCFNet）：**
+
+```python
+class DirectFutureHead(nn.Module):
+    def __init__(self, bev_channels=64, num_future=3):
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(bev_channels, bev_channels, 3, padding=1),
+                nn.BatchNorm2d(bev_channels),
+                nn.ReLU(),
+            ) for _ in range(num_future)
+        ])
+        self.occ_head = BEVOCCHead2D(...)
+
+    def forward(self, fused_bev):
+        future_occs = []
+        for head in self.heads:
+            feat = head(fused_bev)
+            occ = self.occ_head(feat)
+            future_occs.append(occ)
+        return future_occs
+```
+
+**3. 与模块 2 的集成：**
+- 自回归/直接预测生成 BEV 级的未来特征
+- 模块 2 的动静态解耦在 BEV 特征层面操作
+- 最终通过共享的 BEVOCCHead2D 转为 3D 占用
+
+#### 关键代码文件
+- 新增 `projects/mmdet3d_plugin/models/dense_heads/future_occ_head.py`
+- 复用 `models/dense_heads/bev_occ_head.py` 的 BEVOCCHead2D
+
+#### 预期成果
+- 自回归模式：更长 horizon（3s）的优势明显，但有误差累积
+- 直接多步模式：短 horizon（1s）更快更稳
+- 复用 C2H 解码器保持 FlashOCC 的效率优势
+- 推理延迟预期 <100ms（3 帧未来预测）
+
+---
+
+### 模块 4：未来语义辅助监督（Future Semantic Auxiliary Head）
+
+#### 功能
+将 PriorOcc 的 2D 语义辅助损失从当前帧扩展到未来帧——预测未来 2D 语义图作为辅助任务，为未来占用预测提供时序语义正则化。
+
+#### 设计动机
+1. **未来 2D 语义图可廉价获取**——对历史帧的语义预测做运动外推即可得到伪标签
+2. **语义一致性约束**——同一物体在未来帧应保持相同语义类别
+3. **高分辨率正则化**——2D 语义图分辨率远高于 3D 体素，能保留细节信息
+4. **参考先例**——Spatio-Temporal 2D-3D Interaction 论文证明未来 2D 语义预测能提升 3D 预测质量
+
+#### 架构设计
+
+```
+  Future BEV Feature (t+1) ──→ ┌─────────────────────┐
+                                │ Future Sem Projector│
+                                │ BEV → 2D Sem Map    │
+                                │ (逆 view transform) │
+                                └─────────┬───────────┘
+                                          │
+                                Future 2D Sem Pred (t+1)
+                                          │
+                                          ▼
+                                ┌─────────────────────┐
+                                │ Aux Loss            │
+                                │ CE(pred, pseudo_gt) │
+                                │ pseudo_gt = 外推的  │
+                                │  SegFormer 语义图   │
+                                └─────────────────────┘
+```
+
+#### 实现方法
+
+```python
+class FutureSemanticHead(nn.Module):
+    def __init__(self, bev_channels=64, num_classes=17):
+        # BEV → 2D 语义图的投影（逆 view transform 的近似）
+        self.proj = nn.Sequential(
+            nn.Conv2d(bev_channels, 256, 1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, num_classes, 1),
+        )
+
+    def forward(self, future_bev_feat, img_metas):
+        # future_bev_feat: (B, C, Dy, Dx)
+        # 通过相机参数将 BEV 投影回 2D 图像平面
+        future_sem_2d = self.proj(future_bev_feat)  # (B, 17, Dy, Dx)
+        future_sem_2d = bev_to_image(future_sem_2d, img_metas)  # 投影回 2D
+        return future_sem_2d  # (B*N, 17, H, W)
+```
+
+**伪标签生成：**
+- 对当前帧的 SegFormer 语义图，用光流（RAFT）外推到未来帧
+- 或直接用 ego-motion + 物体速度估计做简单 warp
+- 伪标签质量不需很高，作为弱监督正则化即可
+
+**损失：**
+```python
+L_future_sem = CrossEntropy(future_sem_pred, pseudo_gt, ignore_index=255)
+# 权重: 0.1-0.2
+```
+
+#### 关键代码文件
+- 新增 `projects/mmdet3d_plugin/models/model_utils/future_sem_head.py`
+- 修改 `models/detectors/bevdet_occ.py` 添加未来语义损失
+
+#### 预期成果
+- 未来 2D 语义辅助任务提供额外时序正则化
+- 预期未来帧 mIoU 额外提升 0.5-1 点
+- 可视化效果：未来帧的语义边界更清晰
+- **零额外标注成本**——伪标签从已有 SegFormer 输出外推
+
+---
+
+## 三、损失函数设计
+
+### 总损失
+
+```
+L_total = L_occ_current + Σ L_occ_future(k) + λ_2d * L_2d_seg + λ_fsem * L_future_sem
+```
+
+### 各损失详解
+
+| 损失 | 说明 | 权重 |
+|------|------|------|
+| **L_occ_current** | 当前帧 3D 占用 CE + class balance（复用 PriorOcc） | 1.0 |
+| **L_occ_future(k)** | 第 k 个未来帧的 3D 占用 CE + class balance | 1.0 / k（时间衰减） |
+| **L_2d_seg** | 当前帧 2D 语义辅助 CE（复用 PriorOcc） | 0.3 |
+| **L_future_sem** | 未来 2D 语义辅助 CE（伪标签） | 0.1-0.2 |
+
+**时间衰减权重设计：**
+```python
+for k in range(1, num_future + 1):
+    loss_future_k = occ_loss(pred_k, gt_k) * (1.0 / k)
+```
+近期未来权重更高，远期未来权重递减——反映预测难度随时间增加。
+
+---
+
+## 四、指标验证体系
+
+### 4.1 评测协议
+
+遵循 Cam4DOcc benchmark 协议：
+- **输入：** 3 帧历史观测（t-2, t-1, t）@ 2Hz
+- **预测：** 未来 3 帧（t+1, t+2, t+3）@ 2Hz = 1s, 2s, 3s
+- **评测数据集：** nuScenes + Occ3D / Cam4DOcc benchmark
+
+### 4.2 核心指标
+
+| 指标 | 定义 | 现有 SOTA |
+|------|------|-----------|
+| **mIoU @ 1s** | 未来 1s 的语义占用 mIoU | T3Former: 46.32 (GT input) / OCFNet†: 29.36 IoU (camera) |
+| **mIoU @ 2s** | 未来 2s 的语义占用 mIoU | T3Former: 33.23 |
+| **mIoU @ 3s** | 未来 3s 的语义占用 mIoU | T3Former: 28.73 |
+| **Avg mIoU** | 1s/2s/3s 平均 | T3Former: 36.09 |
+| **IoU (GMO)** | 动态物体 IoU | OCFNet†: 29.36→26.82 |
+| **IoU (GSO)** | 静态物体 IoU | OCFNet†: 较高（接近静态 baseline） |
+| **IoU decay** | IoU 随时间的衰减率 | 衡量长期预测稳定性 |
+
+### 4.3 指标验证方式
+
+**mIoU @ future step k 验证：**
+1. 模型预测 `(B, 200, 200, 16, 18)` for each future step k
+2. argmax → `(B, 200, 200, 16)` 类别索引
+3. 与 GT 未来占用 `(B, 200, 200, 16)` 比较（GT 来自 Cam4DOcc 的未来标签）
+4. 18 类逐类计算 IoU，取平均 = mIoU @ step k
+
+**GMO/GSO 分离验证：**
+- GMO（General Movable Objects）：car, truck, bus, pedestrian 等动态类别
+- GSO（General Static Objects）：road, building, vegetation 等静态类别
+- 分别报告 GMO IoU 和 GSO IoU
+- **PriorOcc-4D 的核心优势应在 GMO IoU 上体现**（语义引导的动静态解耦）
+
+**未来标签获取方式：**
+```
+1. 从 nuScenes 获取未来关键帧的 3D bbox 标注
+2. 对动态物体：用 bbox 轨迹 + 恒速假设生成未来占用
+3. 对静态背景：用 ego-motion warp 当前占用到未来帧
+4. 组合为完整的未来 3D 占用 GT
+5. 参考 Cam4DOcc 的标签生成代码
+```
+
+### 4.4 实验设计与 Ablation
+
+| 编号 | 实验 | 目的 |
+|------|------|------|
+| E0 | PriorOcc 单帧 (baseline) | 当前帧基线 mIoU=32.08 |
+| E1 | PriorOcc + 时序融合 (无未来预测) | 时序对当前帧的提升 |
+| E2 | E1 + 直接多步未来预测 | 未来预测的基础性能 |
+| E3 | E2 + 语义动静态解耦 | **核心：语义先验对预测的引导** |
+| E4 | E3 + 自回归预测 | 自回归 vs 直接多步 |
+| E5 | E4 + 未来语义辅助损失 | 辅助任务的正则化效果 |
+| E6 | E5 + 时间衰减权重 | 损失权重策略 |
+| E7 | 不同历史帧数量 (2/3/8) | 时序长度影响 |
+| E8 | 不同动态类别定义 | 动静态划分的敏感性 |
+
+**预期结果表：**
+
+| 实验 | mIoU@1s ↑ | mIoU@2s ↑ | mIoU@3s ↑ | Avg ↑ | GMO IoU ↑ |
+|------|-----------|-----------|-----------|-------|-----------|
+| E2 (direct) | ~30 | ~22 | ~17 | ~23 | ~25 |
+| E3 (+dyn/sta) | ~33 | ~25 | ~19 | ~26 | ~30 |
+| E4 (+autoreg) | ~35 | ~27 | ~21 | ~28 | ~32 |
+| E5 (+future sem) | ~36 | ~28 | ~22 | ~29 | ~33 |
+| E6 (full) | ~37 | ~29 | ~23 | ~30 | ~34 |
+
+---
+
+## 五、SOTA 可能性分析
+
+### 5.1 与 SOTA 的差距评估
+
+| 对比维度 | PriorOcc-4D (预期) | T3Former (SOTA) | 差距 |
+|----------|---------------------|------------------|------|
+| Avg mIoU | ~30 | 36.09 | ~6 点 |
+| 1s mIoU | ~37 | 46.32 | ~9 点（但 T3Former 用 GT 输入） |
+| 输入方式 | 相机（端到端） | GT 占用网格 | **不公平比较** |
+
+**关键区分：T3Former 的 46.32 是用 GT 占用作为输入的 oracle 结果，不是相机端到端。**
+
+如果对比相机端到端方法：
+| 方法 | 1s IoU | Avg |
+|------|--------|-----|
+| Cam4DOcc OCFNet† | 29.36 | 26.82 |
+| Drive-OccWorld | 39.80 (IoU_c) | — |
+| **PriorOcc-4D (预期)** | **~37 mIoU** | **~30** |
+
+**PriorOcc-4D 预期性能在相机端到端方法中有竞争力。**
+
+### 5.2 SOTA 可能性逐项分析
+
+| 目标 | 可能性 | 理由 |
+|------|--------|------|
+| 相机端到端 SOTA | **中等 (30-40%)** | Cam4DOcc baseline 较弱（~27 avg），PriorOcc-4D 有望超越；但 Drive-OccWorld 也用了 C2H 架构 |
+| 全局 SOTA（含 GT 输入） | **极低 (<5%)** | T3Former 用 GT 输入 + triplane delta，架构优势大 |
+| GMO（动态物体）SOTA | **较高 (40-50%)** | 语义动静态解耦对动态物体预测针对性最强 |
+| 效率 SOTA | **高 (60-70%)** | FlashOCC C2H + 静态 warp = 极快，可能是最快的 4D 预测方法 |
+
+### 5.3 实现 SOTA 的有利因素
+
+1. **起点差距小**——PriorOcc 单帧 mIoU 32.08，Cam4DOcc 相机端到端 baseline avg ~27，起点已接近
+2. **FlashOCC 原生时序支持**——多帧 pipeline 零成本获得，不需要从零搭建
+3. **无需额外标注**——未来占用标签来自 Cam4DOcc，无需制作 flow 标签
+4. **C2H 效率优势**——Drive-OccWorld 已证明 C2H 架构适合 4D 预测
+5. **语义解耦的针对性**——动态物体是预测难点，语义先验直接解决这个痛点
+
+### 5.4 实现 SOTA 的不利因素
+
+1. **T3Former 的 triplane delta 架构很强**——36.09 avg mIoU，triplane 表示比 BEV 压缩更高效
+2. **自回归误差累积**——PriorOcc-4D 的 C2H 解码器在自回归模式下可能累积误差
+3. **2D→BEV 投影噪声**——语义先验从 2D 投影到 BEV 依赖深度估计，引入误差
+4. **静态 warp 的局限**——纯静态 warp 无法处理建筑遮挡变化、路面情况变化
+5. **竞争激烈**——2024-2025 有 10+ 篇 4D 预测论文，赛道拥挤
+
+### 5.5 SOTA 可能性总结
+
+**整体判断：在相机端到端赛道上达到或接近 SOTA 的可能性为 30-40%，在效率和动态物体预测单项上可能性更高。**
+
+与 flow 方向对比：
+
+| 维度 | Flow 方向 | 4D Forecasting 方向 |
+|------|----------|---------------------|
+| 起点 vs SOTA 差距 | 12-13 点（极大） | ~6 点（可缩小） |
+| 标注需求 | 需自制 flow 标签（难） | Cam4DOcc 现成标签（易） |
+| 多帧 pipeline | 需从零搭建 | FlashOCC 原生支持 |
+| 实现难度 | 高 | **中低** |
+| SOTA 可能性 | <5% | **30-40%** |
+| 故事新颖性 | 高（语义引导流无人做） | 中高（轻量语义注入做预测无人做） |
+| 赛道竞争 | 中（5-6 篇） | 高（10+ 篇） |
+
+---
+
+## 六、故事策略
+
+### 6.1 推荐故事：语义引导的动静态解耦预测
+
+**一句话故事：**
+> "4D 占用预测的难点在于动态物体，而 2D 语义先验天然知道哪些是动态物体。我们用轻量 SemanticInjector 解耦动静态预测——静态直接 warp，动态聚焦推理——在相机端到端 4D 预测上达到 competitive 性能，同时保持 FlashOCC 的效率优势。"
+
+### 6.2 论文核心 Claim
+
+1. **2D 语义先验可以解耦 4D 占用预测的动静态子问题**，降低预测难度
+2. **轻量 SemanticInjector 比重 2D-3D 交叉注意力更高效**，适合实时自动驾驶
+3. **语义动静态解耦在动态物体（GMO）预测上提升最显著**，这正是预测的核心难点
+4. **未来 2D 语义辅助任务提供时序正则化**，零额外标注成本
+
+### 6.3 如何让 reviewer 接受
+
+| Reviewer 质疑 | 回应 |
+|---------------|------|
+| "T3Former 指标更高" | "T3Former 用 GT 占用输入，我们是相机端到端。同赛道对比我们的 GMO IoU 有竞争力。" |
+| "语义解耦太简单" | "简单但有效——静态 warp 省计算，动态聚焦提精度。效率分析显示 2x 加速。" |
+| "Cam4DOcc 已经用了语义区分动静" | "Cam4DOcc 只用语义做类别划分，我们用 SemanticInjector 做特征注入 + 动静态解耦预测，本质不同。" |
+| "和 Drive-OccWorld 太像" | "Drive-OccWorld 用隐式 normalization，我们用显式语义 mask 解耦，可解释性更强，效率更高。" |
+
+---
+
+## 七、实现路线图
+
+### 阶段 1：基础设施（1-2 周）
+1. 克隆 PriorOcc，切换到 FlashOCC 4D 时序配置
+2. 下载 Cam4DOcc benchmark 数据和标签
+3. 验证 3 帧时序输入的当前帧 mIoU（预期 ~33-34）
+4. 搭建 Cam4DOcc 评测脚本
+
+### 阶段 2：未来预测基线（1-2 周）
+5. 实现直接多步未来预测头（模块 3 方案 B）
+6. 验证 E2：基线未来预测性能
+7. 确认未来标签正确性
+
+### 阶段 3：语义动静态解耦（2-3 周）
+8. 实现 SemanticDynStaSeparator（模块 2）
+9. 实现 DynamicFuturePredictor + StaticFuturePredictor
+10. 实现 SemanticCombiner
+11. 验证 E3：解耦预测的性能提升
+
+### 阶段 4：优化与消融（2-3 周）
+12. 实现自回归预测（模块 3 方案 A）
+13. 实现未来语义辅助头（模块 4）
+14. 运行完整 ablation (E0-E8)
+15. 效率分析（FLOPs、延迟对比）
+
+### 阶段 5：论文撰写（2-3 周）
+16. 整理实验结果和可视化
+17. 撰写论文初稿
+
+**总计：约 8-13 周**（比 flow 方向的 11-15 周更短）
+
+---
+
+## 八、关键参考文献
+
+| 论文 | 会议 | 与本方案的关系 |
+|------|------|---------------|
+| **Cam4DOcc** | CVPR 2024 | 主要 benchmark + 标签生成参考 |
+| **OccWorld** | ECCV 2024 | 自回归预测 + VQ tokenizer 参考 |
+| **Drive-OccWorld** | AAAI 2025 | C2H 架构做 4D 预测的直接先例 |
+| **T3Former** | 2025 | SOTA 方法 + triplane delta 参考 |
+| **DOME** | 2024 | Diffusion 预测参考 |
+| **FSF-Net** | 2024 | BEV flow warp 辅助预测参考 |
+| **OccProphet** | ICLR 2025 | 高效预测参考 |
+| **EfficientOCF** | CVPR 2025 | 效率优化参考 |
+| **Spatio-Temporal 2D-3D** | 2025 | 2D 语义辅助预测的先例 |
+| **UniOcc** | ICCV 2025 | 统一 benchmark |
+| **PriorOcc (ours)** | — | 基础框架，SemanticInjector 来源 |
+| **FlashOCC** | — | C2H 解码器 + 原生时序支持 |
+
