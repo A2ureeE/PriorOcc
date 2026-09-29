@@ -88,6 +88,9 @@ model = dict(
             sem_channels=17,            # 语义类别数
             sgdm_reduction=4,           # SE-Block 压缩率 (正常版: 64 通道)
             depth_feedback_weight=0.3,  # 深度→语义反馈权重 (仅 BSDM)
+            use_semantic_depth_prior=False,  # 语义深度先验 (SDP)，baseline 关闭
+            sdp_weight=1.0,
+            sdp_temperature=1.0,
         ),
     ),
     img_bev_encoder_backbone=dict(

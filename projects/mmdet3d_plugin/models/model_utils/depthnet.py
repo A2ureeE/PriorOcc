@@ -255,6 +255,68 @@ class SemanticGatingModule(nn.Module):
         return gated_feat
 
 
+class SemanticDepthPrior(nn.Module):
+    """Semantic Depth Prior (SDP) — SGDM upgrade.
+
+    Injects a semantic category prior into the ill-posed depth estimation by
+    modulating the DepthNet depth logits with a learned per-class depth
+    distribution:
+
+        P_c   = softmax(table_c / T)                      # (C, D)
+        sigma = softmax(sem_logits)                       # (BN, C, fH, fW)
+        pi    = sum_c sigma_c * P_c                        # (BN, D, fH, fW)
+        depth_logits <- depth_logits + weight * log(pi + eps)
+
+    The table is zero-initialized, so pi starts uniform (1/D) and log(pi) is a
+    per-pixel constant across depth bins -> softmax-invariant. The module is
+    therefore an exact identity at init and preserves the audited SGDM baseline
+    until training shapes the per-class depth priors (e.g. ground -> near/low,
+    building -> far), which reduces 2D->3D projection noise and holes.
+
+    Args:
+        sem_channels: number of semantic classes (C).
+        depth_channels: number of depth bins (D).
+        weight: lambda, strength of the log-prior modulation.
+        temperature: softmax temperature over the per-class depth table.
+        eps: numerical stability epsilon inside the log.
+        clamp_min: lower clamp for log(pi) to avoid extreme negative logits.
+    """
+
+    def __init__(self,
+                 sem_channels=17,
+                 depth_channels=88,
+                 weight=1.0,
+                 temperature=1.0,
+                 eps=1e-6,
+                 clamp_min=-10.0):
+        super(SemanticDepthPrior, self).__init__()
+        self.sem_channels = sem_channels
+        self.depth_channels = depth_channels
+        self.weight = weight
+        self.temperature = temperature
+        self.eps = eps
+        self.clamp_min = clamp_min
+        self.table = nn.Parameter(torch.zeros(sem_channels, depth_channels))
+
+    def forward(self, depth_logits, sem_logits):
+        """Args:
+            depth_logits: (B*N, D, fH, fW) raw depth logits from depth_conv.
+            sem_logits: (B*N, C, fH', fW') semantic logits from SemanticInjector.
+
+        Returns:
+            depth_logits: (B*N, D, fH, fW) prior-modulated depth logits.
+        """
+        if sem_logits.shape[-2:] != depth_logits.shape[-2:]:
+            sem_logits = F.interpolate(
+                sem_logits, size=depth_logits.shape[-2:],
+                mode='bilinear', align_corners=True)
+        sem_prob = F.softmax(sem_logits, dim=1)                        # (BN, C, fH, fW)
+        cls_depth = F.softmax(self.table / self.temperature, dim=1)    # (C, D)
+        prior = torch.einsum('bchw,cd->bdhw', sem_prob, cls_depth)     # (BN, D, fH, fW)
+        log_prior = torch.log(prior + self.eps).clamp_min(self.clamp_min)
+        return depth_logits + self.weight * log_prior
+
+
 class BidirectionalSemanticDepthModule(nn.Module):
     """
     轻量级双向语义-深度联合学习模块 (Lite Bidirectional Semantic-Depth Module - LiteBSDM).
@@ -399,7 +461,10 @@ class DepthNet(nn.Module):
                  use_bidirectional_sgdm=False,
                  sem_channels=17,
                  sgdm_reduction=4,
-                 depth_feedback_weight=0.3):
+                 depth_feedback_weight=0.3,
+                 use_semantic_depth_prior=False,
+                 sdp_weight=1.0,
+                 sdp_temperature=1.0):
         """
         Args:
             sgdm_reduction (int): Reduction ratio for SGDM SE-Block.
@@ -429,6 +494,17 @@ class DepthNet(nn.Module):
                 sem_channels=sem_channels,
                 reduction=sgdm_reduction
             )
+
+        # Semantic Depth Prior (SDP): optional per-class depth-distribution prior
+        self.use_semantic_depth_prior = use_semantic_depth_prior
+        if use_semantic_depth_prior:
+            self.semantic_depth_prior = SemanticDepthPrior(
+                sem_channels=sem_channels,
+                depth_channels=depth_channels,
+                weight=sdp_weight,
+                temperature=sdp_temperature,
+            )
+
         self.reduce_conv = nn.Sequential(
             nn.Conv2d(
                 in_channels, mid_channels, kernel_size=3, stride=1, padding=1),
@@ -670,7 +746,11 @@ class DepthNet(nn.Module):
             depth = checkpoint(self.depth_conv, depth)
         else:
             depth = self.depth_conv(depth)  # (B*N_views, D, fH, fW)
-        
+
+        # Semantic Depth Prior: modulate raw depth logits with a per-class prior
+        if self.use_semantic_depth_prior and sem_logits is not None:
+            depth = self.semantic_depth_prior(depth, sem_logits)
+
         # 双向模式第二阶段：使用 depth_prob 做反向语义增强
         if self.use_bidirectional_sgdm and sem_logits is not None and self.training:
             depth_prob = depth.softmax(dim=1)  # (B*N_views, D, fH, fW)

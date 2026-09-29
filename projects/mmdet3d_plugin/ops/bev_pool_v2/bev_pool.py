@@ -3,7 +3,14 @@
 import numpy as np
 import torch
 
-from . import bev_pool_v2_ext
+try:
+    from . import bev_pool_v2_ext
+    _has_cuda_ext = True
+except (ImportError, RuntimeError):
+    bev_pool_v2_ext = None
+    _has_cuda_ext = False
+
+from .bev_pool_cpu import QuickCumsumCPU
 
 __all__ = ['bev_pool_v2', 'TRTBEVPoolv2']
 
@@ -99,9 +106,14 @@ def bev_pool_v2(depth, feat, ranks_depth, ranks_feat, ranks_bev,
     Returns:
         x: bev feature in shape (B, C, Dz, Dy, Dx)
     """
-    x = QuickCumsumCuda.apply(depth, feat, ranks_depth, ranks_feat, ranks_bev,
-                              bev_feat_shape, interval_starts,
-                              interval_lengths)      # (B, Dz, Dy, Dx, C)
+    if depth.is_cuda and _has_cuda_ext:
+        x = QuickCumsumCuda.apply(depth, feat, ranks_depth, ranks_feat, ranks_bev,
+                                  bev_feat_shape, interval_starts,
+                                  interval_lengths)
+    else:
+        x = QuickCumsumCPU.apply(depth, feat, ranks_depth, ranks_feat, ranks_bev,
+                                 bev_feat_shape, interval_starts,
+                                 interval_lengths)
     x = x.permute(0, 4, 1, 2, 3).contiguous()        # (B, C, Dz, Dy, Dx)
     return x
 
