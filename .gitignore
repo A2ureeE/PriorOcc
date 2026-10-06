@@ -27,5 +27,7 @@ ppl.cv
 *.pdf
 vis/
 *.jpg
-*.pngPlotNeuralNet/
+*.png
+PlotNeuralNet/
+.qoder/
 *.tex

@@ -10,6 +10,7 @@ Forecasting）**：给定历史帧观测，预测未来 1s / 2s / 3s 的 3D 语�
 **配套文档**
 - 研究方案（SOTA 对比、故事线、路线图）：[`nextstep.md`](nextstep.md)
 - 三项创新的方法与公式（技术细节）：[`PRIOROCC_4D_INNOVATIONS_README.md`](PRIOROCC_4D_INNOVATIONS_README.md)
+- 多模态扩展（K 模式 + WTA + 语义模式选择，方法/公式/消融）：[`PRIOROCC_4D_MULTIMODAL_README.md`](PRIOROCC_4D_MULTIMODAL_README.md)
 - 启动/数据/训练（操作手册）：[`PRIOROCC_4D_INNOVATIONS_LAUNCH_GUIDE.md`](PRIOROCC_4D_INNOVATIONS_LAUNCH_GUIDE.md)、[`PRIOROCC_4D_LAUNCH_GUIDE.md`](PRIOROCC_4D_LAUNCH_GUIDE.md)
 - 开发计划：[`PRIOROCC_4D_DEVELOPMENT_PLAN.md`](PRIOROCC_4D_DEVELOPMENT_PLAN.md)
 
@@ -40,6 +41,7 @@ Forecasting）**：给定历史帧观测，预测未来 1s / 2s / 3s 的 3D 语�
 | **FlashOCC** | 单帧 3D 占用 | Channel-to-Height (C2H) 高效解码，BEV→3D 无需 3D 卷积 | — |
 | **PriorOcc** | 单帧 3D 占用 | SemanticInjector：backbone 后注入 2D 语义先验 + 2D 辅助监督 | 单帧 mIoU **32.08** |
 | **PriorOcc-4D**（本仓库） | **4D 占用预测** | 语义先验时空化：语义引导动静解耦 + 语义条件化运动场(SCMF) + **语义运动先验(SMP)** + **语义深度先验(SDP)** + **语义连续性补洞** | 当前帧继承 PriorOcc；另报告未来 1/2/3s mIoU 与 Avg |
+| **PriorOcc-4D 多模态**（可选开启） | **多模态 4D 占用预测** | K 模式运动场 + WTA 训练 + **语义模式选择**（多模态 SMP）+ anti-collapse；评测含 deployed/best-of-K/选择准确率 | 冒烟已通；真实训练待跑（见多模态 README） |
 
 **赛道**：相机端到端 4D 占用预测，对标 Cam4DOcc(OCFNet)、Drive-OccWorld、DOME、T3Former-F 等
 （详见 `nextstep.md` 的 SOTA 对比表）。
@@ -440,17 +442,20 @@ projects/mmdet3d_plugin/models/
     depthnet.py                          # DepthNet + SGDM + SemanticDepthPrior(SDP, 创新③)
     dyn_sta_decoder.py                   # warp_feature(+validity) / 动静分离 / 运动编码 / 注意力 / BEV 投影
     scmf.py                              # SCMF / ConvGRU / warp 有效性门控预测器(创新②)
+                                         # + MultimodalSCMF / MultimodalPredictor（多模态）
     semantic_motion_prior.py             # SemanticMotionPrior(SMP, 创新①)
+                                         # + SemanticMultimodalMotionPrior（K 模式 SMP）
     semantic_continuity.py               # SemanticContinuityLoss(创新②补洞)
     sem_consistency.py                   # 语义时序一致性
     future_semantic.py                   # 未来语义预测器(dormant)
     language_self_gating.py              # 体素级高度先验门控(备用, 默认禁用)
   datasets/
-    nuscenes_4d_forecast_dataset.py      # 4D 预测数据集 + 评测
+    nuscenes_4d_forecast_dataset.py      # 4D 预测数据集 + 评测（+ best-of-K oracle）
     pipelines/loading_future_occ.py      # 未来占用 GT 加载
     pipelines/loading_temporal_seg2d.py  # 时序 2D 语义加载（相机顺序已对齐）
 projects/configs/priorocc/
-    priorocc-4d-r50-smp-sdp-holefill.py  # 主配置（开启三项创新）
+    priorocc-4d-r50-mmodal.py            # 多模态主配置（K=3 + WTA + 语义模式选择）
+    priorocc-4d-r50-smp-sdp-holefill.py  # 确定性主配置（开启三项创新）
     priorocc-4d-r50-stgdm-scmf.py        # baseline 配置
     priorocc-r50.py                      # 单帧 PriorOcc 基配置
 tools/
@@ -458,6 +463,7 @@ tools/
     generate_2d_seg_labels.py            # 生成 2D 语义伪标签(SegFormer)
     create_4d_forecast_infos.py          # 生成 _forecast.pkl
     verify_priorocc_4d.py                # 验证(含 minimal-chain + stats 生产者)
+    smoke_test_multimodal.py             # 多模态 CPU 冒烟测试（模块/模型/评测三层）
     diagnose_priorocc_4d_training.py     # 训练塌缩诊断
     audit_priorocc_4d_static.py          # 静态审计
     train.py / dist_train.sh / test.py   # 训练/评测入口

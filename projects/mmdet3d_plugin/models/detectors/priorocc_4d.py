@@ -71,6 +71,10 @@ class PriorOcc4D(BEVDepth4DOCC):
                  sem_continuity=None,
                  sem_continuity_loss_weights=None,
                  continuity_apply_occ=False,
+                 enable_multimodal=False,
+                 num_modes=3,
+                 mode_cls_loss_weight=0.5,
+                 mode_div_loss_weight=0.05,
                  **kwargs):
         kwargs.pop('use_language_self_gating', None)
         kwargs.pop('language_self_gating', None)
@@ -114,6 +118,10 @@ class PriorOcc4D(BEVDepth4DOCC):
         self._sem_continuity_cfg = sem_continuity
 
         self.continuity_apply_occ = continuity_apply_occ
+        self.enable_multimodal = enable_multimodal
+        self.num_modes = num_modes
+        self.mode_cls_loss_weight = mode_cls_loss_weight
+        self.mode_div_loss_weight = mode_div_loss_weight
         self.motion_prior_loss_weights = dict(
             static_flow=0.05, rigid_smooth=0.02, nonrigid_bound=0.02)
         if motion_prior_loss_weights:
@@ -209,6 +217,104 @@ class PriorOcc4D(BEVDepth4DOCC):
         loss_seg = F.cross_entropy(
             seg_logits, gt_semantic_2d.long(), ignore_index=ignore_index)
         return dict(loss_2d_seg=loss_seg * loss_weight)
+
+    def _per_sample_occ_ce(self, occ_logits, voxel_semantics, mask_camera):
+        """Per-sample masked occupancy CE for WTA mode selection.
+
+        Approximates occ_head.loss (mean CE over camera-masked voxels) but
+        returns a (B,) vector so a winner mode can be picked per sample.
+
+        Args:
+            occ_logits: (B, Dx, Dy, Dz, n_cls).
+            voxel_semantics: (B, Dx, Dy, Dz).
+            mask_camera: (B, Dx, Dy, Dz).
+
+        Returns:
+            (B,) per-sample masked CE.
+        """
+        B = occ_logits.shape[0]
+        n_cls = occ_logits.shape[-1]
+        logits = occ_logits.reshape(-1, n_cls)        # (B*N, C)
+        gt = voxel_semantics.reshape(-1).long()       # (B*N,)
+        ce = F.cross_entropy(
+            logits, gt, reduction='none', ignore_index=255)  # (B*N,)
+        mask = mask_camera.reshape(-1).float()
+        ce = ce * mask
+        return ce.view(B, -1).sum(dim=1) / \
+            mask.view(B, -1).sum(dim=1).clamp(min=1.0)
+
+    def _multimodal_future_losses(self, refined_bev, flow,
+                                  future_voxel_semantics,
+                                  future_mask_camera, mask_camera,
+                                  motion_aux):
+        """Winner-take-all multimodal future losses.
+
+        1. Selection (no grad): score every mode k by the horizon-weighted
+           per-sample occupancy CE of its decoded futures; winner = argmin.
+        2. Winner losses (with grad): decode only the winner chain and emit
+           the same `loss_occ_future_{t+1}s` keys as the deterministic path
+           (backward-compatible loss schema).
+        3. Mode classification: CE between semantic mode logits and the
+           (detached) WTA winner — teaches semantics to pick the mode.
+        4. Mode diversity: anti-collapse regularizer from the multimodal SMP.
+
+        Args:
+            refined_bev: (B, C, H, W) current BEV feature.
+            flow: (B, K, T, 2, H, W) multimodal flow (post motion prior).
+            future_voxel_semantics: (B, T, Dx, Dy, Dz).
+            future_mask_camera: (B, T, Dx, Dy, Dz) or None.
+            mask_camera: (B, Dx, Dy, Dz) current-frame fallback mask.
+            motion_aux: dict from _compute_motion_flow (per_cls_masks etc).
+
+        Returns:
+            dict: loss_occ_future_{t+1}s, loss_mode_cls, loss_mode_div.
+        """
+        losses = dict()
+        future_bevs = self.future_predictor(refined_bev, flow)  # (B,K,T,C,H,W)
+        B, K, T = future_bevs.shape[:3]
+
+        def _mask_t(t):
+            if future_mask_camera is not None:
+                return future_mask_camera[:, t]
+            return mask_camera
+
+        # ---- WTA selection (no grad) ----
+        with torch.no_grad():
+            scores = future_bevs.new_zeros(B, K)
+            for k in range(K):
+                for t in range(T):
+                    logits_kt = self.occ_head(future_bevs[:, k, t])
+                    scores[:, k] += self.future_loss_weights[t] * \
+                        self._per_sample_occ_ce(
+                            logits_kt, future_voxel_semantics[:, t],
+                            _mask_t(t))
+            winner = scores.argmin(dim=1)  # (B,)
+
+        # ---- winner losses (with grad) ----
+        idx = torch.arange(B, device=future_bevs.device)
+        winner_bevs = future_bevs[idx, winner]  # (B, T, C, H, W)
+        for t in range(T):
+            loss_future = self.forward_occ_train(
+                winner_bevs[:, t], future_voxel_semantics[:, t], _mask_t(t))
+            losses[f'loss_occ_future_{t+1}s'] = \
+                loss_future['loss_occ'] * self.future_loss_weights[t]
+
+        # ---- mode classification CE (semantics -> mode) ----
+        if self.motion_prior is not None and motion_aux is not None and \
+                hasattr(self.motion_prior, 'mode_logits'):
+            mode_logits = self.motion_prior.mode_logits(
+                motion_aux['per_cls_masks'])  # (B, K)
+            losses['loss_mode_cls'] = F.cross_entropy(
+                mode_logits, winner.detach()) * self.mode_cls_loss_weight
+
+        # ---- mode diversity (anti-collapse) ----
+        if self.motion_prior is not None and \
+                hasattr(self.motion_prior, 'diversity_loss'):
+            losses['loss_mode_div'] = \
+                self.motion_prior.diversity_loss(flow) * \
+                self.mode_div_loss_weight
+
+        return losses
 
     def prepare_bev_feat(self, img, sensor2ego, ego2global, intrin, post_rot,
                          post_tran, bda, mlp_input):
@@ -523,18 +629,27 @@ class PriorOcc4D(BEVDepth4DOCC):
                     B, self.num_future, 2, H, W,
                     device=refined_bev.device, dtype=refined_bev.dtype)
 
-            future_bevs = self.future_predictor(refined_bev, flow)
-            for k in range(self.num_future):
-                future_feat_k = future_bevs[:, k]
-                future_gt_k = future_voxel_semantics[:, k]
-                if future_mask_camera is not None:
-                    future_mask_k = future_mask_camera[:, k]
-                else:
-                    future_mask_k = mask_camera
-                loss_future = self.forward_occ_train(
-                    future_feat_k, future_gt_k, future_mask_k)
-                losses[f'loss_occ_future_{k+1}s'] = \
-                    loss_future['loss_occ'] * self.future_loss_weights[k]
+            if self.enable_multimodal and flow is not None and \
+                    flow.dim() == 6:
+                # K-mode winner-take-all path (loss keys stay compatible
+                # with the deterministic schema: loss_occ_future_{t+1}s).
+                mm_losses = self._multimodal_future_losses(
+                    refined_bev, flow, future_voxel_semantics,
+                    future_mask_camera, mask_camera, motion_aux)
+                losses.update(mm_losses)
+            else:
+                future_bevs = self.future_predictor(refined_bev, flow)
+                for k in range(self.num_future):
+                    future_feat_k = future_bevs[:, k]
+                    future_gt_k = future_voxel_semantics[:, k]
+                    if future_mask_camera is not None:
+                        future_mask_k = future_mask_camera[:, k]
+                    else:
+                        future_mask_k = mask_camera
+                    loss_future = self.forward_occ_train(
+                        future_feat_k, future_gt_k, future_mask_k)
+                    losses[f'loss_occ_future_{k+1}s'] = \
+                        loss_future['loss_occ'] * self.future_loss_weights[k]
 
             if self.future_semantic is not None and \
                     'future_gt_semantic_bev' in kwargs:
@@ -576,6 +691,9 @@ class PriorOcc4D(BEVDepth4DOCC):
         Returns:
             When future_predictor is available: dict with occ_current,
             occ_future (list of T predictions), and horizons_sec.
+            Multimodal models additionally return occ_future_modes
+            (K x T predictions) and mode_probs (per-sample mode
+            probabilities) for best-of-K evaluation.
             Otherwise: list of current occupancy predictions.
         """
         img_feats, _, depth, seg_logits_list, bev_feat_list, \
@@ -590,15 +708,20 @@ class PriorOcc4D(BEVDepth4DOCC):
         occ_current = self.simple_test_occ(occ_bev_feature, img_metas)
 
         if self.future_predictor is not None:
-            flow, refined_bev = self._compute_motion_flow(
+            flow, refined_bev, _, motion_aux = self._compute_motion_flow(
                 occ_bev_feature, bev_feat_list, key_frame_metas,
-                seg_logits_list, depth)
+                seg_logits_list, depth, return_semantic_masks=True)
 
             if flow is None and hasattr(self.future_predictor, 'conv_gru'):
                 B, C, H, W = refined_bev.shape
                 flow = torch.zeros(
                     B, self.num_future, 2, H, W,
                     device=refined_bev.device, dtype=refined_bev.dtype)
+
+            if self.enable_multimodal and flow is not None and \
+                    flow.dim() == 6:
+                return self._multimodal_simple_test(
+                    occ_current, refined_bev, flow, img_metas, motion_aux)
 
             future_bevs = self.future_predictor(refined_bev, flow)
             occ_future = []
@@ -612,6 +735,61 @@ class PriorOcc4D(BEVDepth4DOCC):
                 horizons_sec=self.horizons_sec)
 
         return occ_current
+
+    def _multimodal_simple_test(self, occ_current, refined_bev, flow,
+                                img_metas, motion_aux):
+        """Multimodal inference: semantic mode selection + all-mode outputs.
+
+        The deployed prediction (occ_future) uses the mode with the highest
+        semantic mode probability; occ_future_modes additionally exposes
+        every mode's futures for best-of-K (oracle) evaluation.
+
+        Args:
+            occ_current: current-frame occupancy predictions.
+            refined_bev: (B, C, H, W) current BEV feature.
+            flow: (B, K, T, 2, H, W) multimodal flow.
+            img_metas: image metas for occ head decoding.
+            motion_aux: dict with per_cls_masks (for mode logits).
+
+        Returns:
+            dict: occ_current, occ_future (T), horizons_sec, mode_probs
+            (list of B lists of K), occ_future_modes (K x T).
+        """
+        future_bevs = self.future_predictor(refined_bev, flow)  # (B,K,T,C,H,W)
+        B, K, T = future_bevs.shape[:3]
+        device = future_bevs.device
+
+        mode_probs = None
+        if self.motion_prior is not None and motion_aux is not None and \
+                hasattr(self.motion_prior, 'mode_logits'):
+            with torch.no_grad():
+                mode_logits = self.motion_prior.mode_logits(
+                    motion_aux['per_cls_masks'])
+                probs = torch.softmax(mode_logits, dim=1)  # (B, K)
+            mode_probs = probs.cpu().tolist()
+            k_sel = probs.argmax(dim=1)  # (B,)
+        else:
+            k_sel = torch.zeros(B, dtype=torch.long, device=device)
+
+        idx = torch.arange(B, device=device)
+        selected = future_bevs[idx, k_sel]  # (B, T, C, H, W)
+        occ_future = [
+            self.simple_test_occ(selected[:, t], img_metas)
+            for t in range(T)]
+
+        occ_future_modes = [
+            [self.simple_test_occ(future_bevs[:, k, t], img_metas)
+             for t in range(T)]
+            for k in range(K)]
+
+        result = dict(
+            occ_current=occ_current,
+            occ_future=occ_future,
+            horizons_sec=self.horizons_sec)
+        if mode_probs is not None:
+            result['mode_probs'] = mode_probs
+        result['occ_future_modes'] = occ_future_modes
+        return result
 
     def forward_dummy(self, points=None, img_metas=None, img_inputs=None,
                       **kwargs):

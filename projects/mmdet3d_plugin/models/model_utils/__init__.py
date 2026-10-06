@@ -5,10 +5,13 @@ from .dyn_sta_decoder import (warp_feature, SemanticDynStaSeparator,
     SemanticMotionFeatureEncoder, SemanticMotionAttention,
     PerClassDeltaCombiner, SemanticBEVProjector)
 from .scmf import (SemanticConditionedMotionField, MotionFieldWarper,
-    SCMFEnhancedPredictor, DirectFutureOccupancyHead)
+    SCMFEnhancedPredictor, DirectFutureOccupancyHead,
+    MultimodalSemanticConditionedMotionField,
+    MultimodalSCMFEnhancedPredictor)
 from .sem_consistency import SemConsistencyLoss
 from .future_semantic import FutureSemanticPredictor
-from .semantic_motion_prior import SemanticMotionPrior
+from .semantic_motion_prior import (SemanticMotionPrior,
+    SemanticMultimodalMotionPrior)
 from .semantic_continuity import SemanticContinuityLoss
 
 __all__ = [
@@ -20,4 +23,5 @@ __all__ = [
     'MotionFieldWarper', 'SCMFEnhancedPredictor', 'DirectFutureOccupancyHead',
     'SemanticBEVProjector', 'SemConsistencyLoss',
     'FutureSemanticPredictor', 'SemanticMotionPrior',
-    'SemanticContinuityLoss']
+    'SemanticContinuityLoss', 'MultimodalSemanticConditionedMotionField',
+    'MultimodalSCMFEnhancedPredictor', 'SemanticMultimodalMotionPrior']
