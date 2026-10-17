@@ -541,9 +541,13 @@ class PriorOcc4D(BEVDepth4DOCC):
                 points, img_inputs=img_inputs, img_metas=img_metas, **kwargs)
 
         losses = dict()
-        gt_depth = kwargs['gt_depth']
-        losses['loss_depth'] = \
-            self.img_view_transformer.get_depth_loss(gt_depth, depth)
+        # depth 监督可选：未提供 gt_depth（纯相机 pipeline）或 loss_depth_weight<=0
+        # 时自动跳过，与"单帧关闭 depth loss"的处理一致，且对原 config 向后兼容。
+        if 'gt_depth' in kwargs and getattr(
+                self.img_view_transformer, 'loss_depth_weight', 0) > 0:
+            gt_depth = kwargs['gt_depth']
+            losses['loss_depth'] = \
+                self.img_view_transformer.get_depth_loss(gt_depth, depth)
 
         voxel_semantics = kwargs['voxel_semantics']
         mask_camera = kwargs['mask_camera']
