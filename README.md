@@ -11,6 +11,7 @@ Forecasting）**：给定历史帧观测，预测未来 1s / 2s / 3s 的 3D 语�
 - 研究方案（SOTA 对比、故事线、路线图）：[`nextstep.md`](nextstep.md)
 - 三项创新的方法与公式（技术细节）：[`PRIOROCC_4D_INNOVATIONS_README.md`](PRIOROCC_4D_INNOVATIONS_README.md)
 - 多模态扩展（K 模式 + WTA + 语义模式选择，方法/公式/消融）：[`PRIOROCC_4D_MULTIMODAL_README.md`](PRIOROCC_4D_MULTIMODAL_README.md)
+- 工具使用手册（各脚本用途与用法）：[`tools/README.md`](tools/README.md)
 - 启动/数据/训练（操作手册）：[`PRIOROCC_4D_INNOVATIONS_LAUNCH_GUIDE.md`](PRIOROCC_4D_INNOVATIONS_LAUNCH_GUIDE.md)、[`PRIOROCC_4D_LAUNCH_GUIDE.md`](PRIOROCC_4D_LAUNCH_GUIDE.md)
 - 开发计划：[`PRIOROCC_4D_DEVELOPMENT_PLAN.md`](PRIOROCC_4D_DEVELOPMENT_PLAN.md)
 
@@ -464,6 +465,7 @@ tools/
     create_4d_forecast_infos.py          # 生成 _forecast.pkl
     verify_priorocc_4d.py                # 验证(含 minimal-chain + stats 生产者)
     smoke_test_multimodal.py             # 多模态 CPU 冒烟测试（模块/模型/评测三层）
+    vis_multimodal_uncertainty.py        # 多模态不确定性可视化（CPU headless）
     diagnose_priorocc_4d_training.py     # 训练塌缩诊断
     audit_priorocc_4d_static.py          # 静态审计
     train.py / dist_train.sh / test.py   # 训练/评测入口

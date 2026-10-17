@@ -193,6 +193,7 @@ projects/configs/priorocc/
   priorocc-4d-r50-mmodal.py            # 主配置（继承 smp-sdp-holefill，替换三模块）
 tools/
   smoke_test_multimodal.py             # CPU 冒烟测试（模块/模型/评测三层）
+  vis_multimodal_uncertainty.py        # 多模态不确定性可视化（CPU headless，见 §7）
 ```
 
 **消融开关**（`--cfg-options`）：
@@ -253,7 +254,38 @@ python tools/smoke_test_multimodal.py --full      # + Part B(模型级 WTA/梯�
 
 ---
 
-## 7. 训练入口
+## 7. 不确定性可视化（多模态的独占卖点）
+
+确定性预测给不出"模型有多不确定"；多模态天然可以——**K 个模式在哪些体素
+意见分歧，就是预测不确定性**。工具：[`tools/vis_multimodal_uncertainty.py`](tools/vis_multimodal_uncertainty.py)
+（headless，**CPU 可出图**，用法详见 [`tools/README.md`](tools/README.md) §2）。
+
+**三档度量**：
+| 度量 | 定义 | 数据需求 |
+|---|---|---|
+| mode agreement | 逐体素 K 个 argmax 类别的众数占比 ∈[1/K,1] | argmax（零改动） |
+| occupied variance | occupied/free 二值在 K 模式间的方差 ∈[0,0.25]（安全向） | argmax（零改动） |
+| predictive entropy | π 加权融合分布 `p(c\|v)=Σ_k π_k·softmax_k(v)` 的归一化熵 | 各模式概率 |
+
+**输出**：每 horizon 一张图——第一行 K 个模式的 BEV 语义（含 π），第二行
+agreement / occupied-variance / entropy / GT 热力图（红=高不确定）。
+
+**判读**：高不确定应集中在运动物体未来位置；不确定性随 horizon 增大（误差
+累积）；若静态背景也高不确定 → 模式塌缩，需检查训练。
+
+```bash
+# CPU 自测（无需权重，验证管线）
+python tools/vis_multimodal_uncertainty.py --self-test --output-dir work_dirs/mm_uncertainty_demo
+# 有训练权重后：在线推理出图 / 或离线 npz 出图
+python tools/vis_multimodal_uncertainty.py --config $CFG --checkpoint ckpt.pth --sample-index 0
+```
+
+> 依赖说明：有意义的图需**训练后**的多模态权重（随机初始化下 K 链几乎相同，
+> 不确定性图会全"确定"）。工具本身与自测可在 CPU 完成，训练一结束即可出论文插图。
+
+---
+
+## 8. 训练入口
 
 ```bash
 CFG=projects/configs/priorocc/priorocc-4d-r50-mmodal.py
@@ -269,7 +301,7 @@ python tools/test.py $CFG work_dirs/priorocc-4d-mmodal/latest.pth --eval mIoU
 
 ---
 
-## 8. 风险与验证状态
+## 9. 风险与验证状态
 
 | 风险 | 缓解 | 状态 |
 |---|---|---|
