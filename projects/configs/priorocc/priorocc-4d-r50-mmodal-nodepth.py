@@ -15,6 +15,9 @@ model = dict(
 
 load_from = None
 
+# 混合精度训练：约 1.5-2x 提速 + 显存减半（dynamic loss scale 自适应）
+fp16 = dict(loss_scale='dynamic')
+
 # ---- mmcv 继承不暴露基类 Python 变量，需本地重定义 ----
 class_names = [
     'car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'barrier',

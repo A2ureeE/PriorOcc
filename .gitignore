@@ -31,3 +31,6 @@ vis/
 PlotNeuralNet/
 .qoder/
 *.tex
+
+# 实验日志（本地记录，不纳入版本管理）
+EXPERIMENT_LOG.md

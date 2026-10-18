@@ -174,7 +174,10 @@ class SemanticMotionPrior(nn.Module):
         dy = flow[..., 1:, :] - flow[..., :-1, :]  # (B,T,2,H-1,W) diff along H
         wx = torch.min(p_rig[..., :-1], p_rig[..., 1:])  # (B,1,H,W-1)
         wy = torch.min(p_rig[..., :-1, :], p_rig[..., 1:, :])  # (B,1,H-1,W)
-        rigid_num = (wx * dx.abs()).sum() + (wy * dy.abs()).sum()
+        # dx/dy 为 (B,T,2,H,W-1)/(B,T,2,H-1,W)，wx/wy 需升维到 (B,1,1,H,W-1)
+        # 才能正确广播（否则 B!=T 时 dim1 冲突）。
+        rigid_num = (wx.unsqueeze(2) * dx.abs()).sum() + \
+            (wy.unsqueeze(2) * dy.abs()).sum()
         rigid_den = wx.sum() * (T * 2) + wy.sum() * (T * 2) + eps
         loss_rigid = rigid_num / rigid_den
 

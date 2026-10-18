@@ -206,7 +206,7 @@ class PriorOcc4D(BEVDepth4DOCC):
                 ignore_index = int(cfg.get('ignore_index', 255))
 
         if gt_semantic_2d.dim() == 4:
-            gt_semantic_2d = gt_semantic_2d.view(
+            gt_semantic_2d = gt_semantic_2d.reshape(
                 -1, gt_semantic_2d.shape[-2], gt_semantic_2d.shape[-1])
 
         if seg_logits.shape[-2:] != gt_semantic_2d.shape[-2:]:
