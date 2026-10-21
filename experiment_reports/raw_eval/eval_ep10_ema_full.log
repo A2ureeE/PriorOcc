@@ -1,0 +1,106 @@
+Using /root/.cache/torch_extensions/py38_cu113 as PyTorch extensions root...
+Detected CUDA files, patching ldflags
+Emitting ninja build file /root/.cache/torch_extensions/py38_cu113/dvr/build.ninja...
+Building extension module dvr...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+ninja: no work to do.
+/root/miniconda3/lib/python3.8/site-packages/torch/functional.py:568: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at  ../aten/src/ATen/native/TensorShape.cpp:2228.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/root/miniconda3/lib/python3.8/site-packages/mmdet/models/backbones/resnet.py:401: UserWarning: DeprecationWarning: pretrained is deprecated, please use "init_cfg" instead
+  warnings.warn('DeprecationWarning: pretrained is deprecated, '
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/losses/cross_entropy_loss.py:240: UserWarning: Default ``avg_non_ignore`` is False, if you would like to ignore the certain label and average loss over non-ignore labels, which is the same with PyTorch official cross_entropy, set ``avg_non_ignore=True``.
+  warnings.warn(
+2026-10-19 16:31:37,465 - root - INFO - DeformConv2dPack img_view_transformer.depth_net.depth_conv.4 is upgraded to version 2.
+Loading extension module dvr...
+SemanticInjector: loss_weight = 0.3
+load checkpoint from local path: /root/autodl-tmp/dataforpriorocc/work_dirs/smp-sdp-holefill-nodepth/epoch_10_ema.pth
+SELECTED 4818/4818 samples, stride=1 (scene-spread)
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:288: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  ranks_depth = torch.range(
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:290: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  ranks_feat = torch.range(
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:301: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  batch_idx = torch.range(0, B - 1).reshape(B, 1). \
+RESULT_TYPE dict ['occ_current', 'occ_future', 'horizons_sec']
+
+==== EVAL on 4818 samples (future 4818) stride=1 ckpt=epoch_10_ema.pth ====
+=== CURRENT-frame mIoU ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 4.23
+===> barrier - IoU = 27.42
+===> bicycle - IoU = 0.11
+===> bus - IoU = 25.62
+===> car - IoU = 33.06
+===> construction_vehicle - IoU = 8.49
+===> motorcycle - IoU = 3.48
+===> pedestrian - IoU = 6.94
+===> traffic_cone - IoU = 3.07
+===> trailer - IoU = 18.6
+===> truck - IoU = 20.66
+===> driveable_surface - IoU = 76.33
+===> other_flat - IoU = 35.56
+===> sidewalk - IoU = 44.84
+===> terrain - IoU = 49.49
+===> manmade - IoU = 33.08
+===> vegetation - IoU = 27.84
+===> mIoU of 4818 samples: 24.64
+=== FUTURE 1s mIoU ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 4.32
+===> barrier - IoU = 22.58
+===> bicycle - IoU = 0.0
+===> bus - IoU = 12.65
+===> car - IoU = 15.58
+===> construction_vehicle - IoU = 4.16
+===> motorcycle - IoU = 0.3
+===> pedestrian - IoU = 1.47
+===> traffic_cone - IoU = 1.92
+===> trailer - IoU = 11.13
+===> truck - IoU = 10.3
+===> driveable_surface - IoU = 70.87
+===> other_flat - IoU = 31.17
+===> sidewalk - IoU = 39.03
+===> terrain - IoU = 43.62
+===> manmade - IoU = 29.55
+===> vegetation - IoU = 22.99
+===> mIoU of 4818 samples: 18.92
+=== FUTURE 2s mIoU ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 2.8
+===> barrier - IoU = 19.03
+===> bicycle - IoU = 0.02
+===> bus - IoU = 5.48
+===> car - IoU = 10.43
+===> construction_vehicle - IoU = 2.26
+===> motorcycle - IoU = 0.23
+===> pedestrian - IoU = 0.61
+===> traffic_cone - IoU = 1.32
+===> trailer - IoU = 6.33
+===> truck - IoU = 4.87
+===> driveable_surface - IoU = 67.56
+===> other_flat - IoU = 27.55
+===> sidewalk - IoU = 35.74
+===> terrain - IoU = 38.91
+===> manmade - IoU = 26.46
+===> vegetation - IoU = 20.76
+===> mIoU of 4818 samples: 15.9
+=== FUTURE 3s mIoU ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 1.57
+===> barrier - IoU = 15.74
+===> bicycle - IoU = 0.0
+===> bus - IoU = 3.14
+===> car - IoU = 7.6
+===> construction_vehicle - IoU = 1.15
+===> motorcycle - IoU = 0.2
+===> pedestrian - IoU = 0.41
+===> traffic_cone - IoU = 1.03
+===> trailer - IoU = 4.7
+===> truck - IoU = 3.45
+===> driveable_surface - IoU = 64.23
+===> other_flat - IoU = 23.55
+===> sidewalk - IoU = 31.95
+===> terrain - IoU = 34.69
+===> manmade - IoU = 22.74
+===> vegetation - IoU = 17.87
+===> mIoU of 4818 samples: 13.77

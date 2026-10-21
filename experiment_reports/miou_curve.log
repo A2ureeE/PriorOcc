@@ -1,0 +1,6 @@
+# epoch  current  future1s  future2s  future3s   (300 scene-spread subset, stride~16, image-mask mIoU)
+epoch=3 current=19.47 future1s=14.67 future2s=12.3 future3s=10.87
+epoch=4 current=20.11 future1s=15.02 future2s=12.75 future3s=11.29
+2026-10-18 18:37:19 epoch=6 current=21.85 future1s=16.77 future2s=14.35 future3s=12.57
+2026-10-19 02:04:18 epoch=8 current=22.77 future1s=17.23 future2s=14.47 future3s=12.59
+2026-10-19 07:41:19 epoch=10 current=22.92 future1s=17.59 future2s=14.65 future3s=12.66

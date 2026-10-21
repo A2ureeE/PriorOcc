@@ -1,0 +1,50 @@
+Using /root/.cache/torch_extensions/py38_cu113 as PyTorch extensions root...
+Detected CUDA files, patching ldflags
+Emitting ninja build file /root/.cache/torch_extensions/py38_cu113/dvr/build.ninja...
+Building extension module dvr...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+[1/2] /usr/local/cuda/bin/nvcc  -DTORCH_EXTENSION_NAME=dvr -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include/TH -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include/THC -isystem /usr/local/cuda/include -isystem /root/miniconda3/include/python3.8 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_86,code=compute_86 -gencode=arch=compute_86,code=sm_86 --compiler-options '-fPIC' -allow-unsupported-compiler -std=c++14 -c /root/priorocc/PriorOcc/lib/dvr/dvr.cu -o dvr.cuda.o 
+/root/priorocc/PriorOcc/lib/dvr/dvr.cu(174): warning: variable "p" was set but never used
+
+/root/priorocc/PriorOcc/lib/dvr/dvr.cu(174): warning: variable "p" was set but never used
+
+[2/2] c++ dvr.o dvr.cuda.o -shared -L/root/miniconda3/lib/python3.8/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda_cu -ltorch_cuda_cpp -ltorch -ltorch_python -L/usr/local/cuda/lib64 -lcudart -o dvr.so
+Loading extension module dvr...
+TOKENS_4D 4818
+SUBSET 4818 / 6019
+/root/miniconda3/lib/python3.8/site-packages/torch/functional.py:568: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at  ../aten/src/ATen/native/TensorShape.cpp:2228.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/root/miniconda3/lib/python3.8/site-packages/mmdet/models/backbones/resnet.py:401: UserWarning: DeprecationWarning: pretrained is deprecated, please use "init_cfg" instead
+  warnings.warn('DeprecationWarning: pretrained is deprecated, '
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/losses/cross_entropy_loss.py:240: UserWarning: Default ``avg_non_ignore`` is False, if you would like to ignore the certain label and average loss over non-ignore labels, which is the same with PyTorch official cross_entropy, set ``avg_non_ignore=True``.
+  warnings.warn(
+2026-10-21 22:09:04,284 - root - INFO - DeformConv2dPack img_view_transformer.depth_net.depth_conv.4 is upgraded to version 2.
+SemanticInjector: loss_weight = 0.3
+load checkpoint from local path: /root/priorocc/PriorOcc/ckpts/priorocc-singleframe-ep21.pth
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:288: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  ranks_depth = torch.range(
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:290: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  ranks_feat = torch.range(
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:301: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  batch_idx = torch.range(0, B - 1).reshape(B, 1). \
+
+==== ep21 single-frame on SAME 4818-frame subset: 4818 samples ====
+===> per class IoU of 4818 samples:
+===> others - IoU = 7.44
+===> barrier - IoU = 39.65
+===> bicycle - IoU = 16.8
+===> bus - IoU = 38.31
+===> car - IoU = 45.1
+===> construction_vehicle - IoU = 18.21
+===> motorcycle - IoU = 17.1
+===> pedestrian - IoU = 20.49
+===> traffic_cone - IoU = 18.96
+===> trailer - IoU = 28.18
+===> truck - IoU = 31.83
+===> driveable_surface - IoU = 79.51
+===> other_flat - IoU = 38.5
+===> sidewalk - IoU = 50.1
+===> terrain - IoU = 53.42
+===> manmade - IoU = 38.29
+===> vegetation - IoU = 33.21
+===> mIoU of 4818 samples: 33.83

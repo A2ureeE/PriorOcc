@@ -1,0 +1,1 @@
+/root/autodl-tmp/dataforpriorocc/work_dirs/smp-warmstart/epoch_15_ema.pth

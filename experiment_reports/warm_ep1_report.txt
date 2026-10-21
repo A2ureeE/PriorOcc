@@ -1,0 +1,13 @@
+==== 热启 epoch1 全量 val mIoU (顺序 当前帧/1s/2s/3s) ====
+[non-EMA ep1]
+mIoU of 4818 samples: 28.18
+mIoU of 4818 samples: 17.89
+mIoU of 4818 samples: 14.2
+mIoU of 4818 samples: 12.11
+[EMA ep1]
+mIoU of 4818 samples: 30.42
+mIoU of 4818 samples: 18.84
+mIoU of 4818 samples: 14.92
+mIoU of 4818 samples: 12.75
+[对照 从头 ep10 全量EMA] 24.64 / 18.92 / 15.90 / 13.77
+[对照 从头 ep10 子集非EMA] 22.92 / 17.59 / 14.65 / 12.66

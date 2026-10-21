@@ -1,0 +1,170 @@
+Using /root/.cache/torch_extensions/py38_cu113 as PyTorch extensions root...
+Detected CUDA files, patching ldflags
+Emitting ninja build file /root/.cache/torch_extensions/py38_cu113/dvr/build.ninja...
+Building extension module dvr...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+[1/2] /usr/local/cuda/bin/nvcc  -DTORCH_EXTENSION_NAME=dvr -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include/TH -isystem /root/miniconda3/lib/python3.8/site-packages/torch/include/THC -isystem /usr/local/cuda/include -isystem /root/miniconda3/include/python3.8 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_86,code=compute_86 -gencode=arch=compute_86,code=sm_86 --compiler-options '-fPIC' -allow-unsupported-compiler -std=c++14 -c /root/priorocc/PriorOcc/lib/dvr/dvr.cu -o dvr.cuda.o 
+/root/priorocc/PriorOcc/lib/dvr/dvr.cu(174): warning: variable "p" was set but never used
+
+/root/priorocc/PriorOcc/lib/dvr/dvr.cu(174): warning: variable "p" was set but never used
+
+[2/2] c++ dvr.o dvr.cuda.o -shared -L/root/miniconda3/lib/python3.8/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda_cu -ltorch_cuda_cpp -ltorch -ltorch_python -L/usr/local/cuda/lib64 -lcudart -o dvr.so
+/root/miniconda3/lib/python3.8/site-packages/torch/functional.py:568: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at  ../aten/src/ATen/native/TensorShape.cpp:2228.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/root/miniconda3/lib/python3.8/site-packages/mmdet/models/backbones/resnet.py:401: UserWarning: DeprecationWarning: pretrained is deprecated, please use "init_cfg" instead
+  warnings.warn('DeprecationWarning: pretrained is deprecated, '
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/losses/cross_entropy_loss.py:240: UserWarning: Default ``avg_non_ignore`` is False, if you would like to ignore the certain label and average loss over non-ignore labels, which is the same with PyTorch official cross_entropy, set ``avg_non_ignore=True``.
+  warnings.warn(
+2026-10-21 21:16:43,085 - root - INFO - DeformConv2dPack img_view_transformer.depth_net.depth_conv.4 is upgraded to version 2.
+Loading extension module dvr...
+SemanticInjector: loss_weight = 0.3
+load checkpoint from local path: /root/autodl-tmp/dataforpriorocc/work_dirs/smp-warmstart/epoch_19_ema.pth
+SELECTED 4818/4818 stride=1
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:288: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  ranks_depth = torch.range(
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:290: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  ranks_feat = torch.range(
+/root/priorocc/PriorOcc/projects/mmdet3d_plugin/models/necks/view_transformer.py:301: UserWarning: torch.range is deprecated and will be removed in a future release because its behavior is inconsistent with Python's range builtin. Instead, use torch.arange, which produces values in [start, end).
+  batch_idx = torch.range(0, B - 1).reshape(B, 1). \
+
+==== B-baseline eval on 4818 samples ckpt=epoch_19_ema.pth ====
+=== CURRENT-frame (model) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 6.29
+===> barrier - IoU = 36.76
+===> bicycle - IoU = 14.53
+===> bus - IoU = 36.88
+===> car - IoU = 42.4
+===> construction_vehicle - IoU = 15.51
+===> motorcycle - IoU = 14.74
+===> pedestrian - IoU = 16.89
+===> traffic_cone - IoU = 17.62
+===> trailer - IoU = 24.07
+===> truck - IoU = 30.85
+===> driveable_surface - IoU = 78.52
+===> other_flat - IoU = 36.65
+===> sidewalk - IoU = 48.93
+===> terrain - IoU = 52.26
+===> manmade - IoU = 37.5
+===> vegetation - IoU = 32.69
+===> mIoU of 4818 samples: 31.95
+=== FUTURE 1s (MODEL) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 4.32
+===> barrier - IoU = 26.53
+===> bicycle - IoU = 2.02
+===> bus - IoU = 15.98
+===> car - IoU = 20.53
+===> construction_vehicle - IoU = 4.89
+===> motorcycle - IoU = 1.35
+===> pedestrian - IoU = 3.36
+===> traffic_cone - IoU = 6.18
+===> trailer - IoU = 16.19
+===> truck - IoU = 13.2
+===> driveable_surface - IoU = 71.83
+===> other_flat - IoU = 30.98
+===> sidewalk - IoU = 41.88
+===> terrain - IoU = 45.19
+===> manmade - IoU = 30.76
+===> vegetation - IoU = 26.17
+===> mIoU of 4818 samples: 21.26
+=== FUTURE 2s (MODEL) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 4.21
+===> barrier - IoU = 21.03
+===> bicycle - IoU = 0.49
+===> bus - IoU = 7.45
+===> car - IoU = 13.64
+===> construction_vehicle - IoU = 1.36
+===> motorcycle - IoU = 0.61
+===> pedestrian - IoU = 1.37
+===> traffic_cone - IoU = 4.08
+===> trailer - IoU = 10.01
+===> truck - IoU = 6.56
+===> driveable_surface - IoU = 67.07
+===> other_flat - IoU = 26.65
+===> sidewalk - IoU = 36.51
+===> terrain - IoU = 38.72
+===> manmade - IoU = 26.74
+===> vegetation - IoU = 22.31
+===> mIoU of 4818 samples: 16.99
+=== FUTURE 3s (MODEL) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 3.35
+===> barrier - IoU = 17.42
+===> bicycle - IoU = 0.11
+===> bus - IoU = 4.66
+===> car - IoU = 9.95
+===> construction_vehicle - IoU = 0.39
+===> motorcycle - IoU = 0.43
+===> pedestrian - IoU = 0.76
+===> traffic_cone - IoU = 3.13
+===> trailer - IoU = 6.99
+===> truck - IoU = 4.11
+===> driveable_surface - IoU = 63.55
+===> other_flat - IoU = 23.37
+===> sidewalk - IoU = 32.65
+===> terrain - IoU = 33.87
+===> manmade - IoU = 23.85
+===> vegetation - IoU = 19.45
+===> mIoU of 4818 samples: 14.59
+=== FUTURE 1s (B-freeze-model-current) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 3.14
+===> barrier - IoU = 20.34
+===> bicycle - IoU = 2.66
+===> bus - IoU = 16.9
+===> car - IoU = 16.19
+===> construction_vehicle - IoU = 6.17
+===> motorcycle - IoU = 2.41
+===> pedestrian - IoU = 3.67
+===> traffic_cone - IoU = 6.07
+===> trailer - IoU = 14.94
+===> truck - IoU = 9.82
+===> driveable_surface - IoU = 65.96
+===> other_flat - IoU = 26.37
+===> sidewalk - IoU = 35.73
+===> terrain - IoU = 40.6
+===> manmade - IoU = 25.95
+===> vegetation - IoU = 21.74
+===> mIoU of 4818 samples: 18.75
+=== FUTURE 2s (B-freeze-model-current) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 1.45
+===> barrier - IoU = 14.97
+===> bicycle - IoU = 2.1
+===> bus - IoU = 11.0
+===> car - IoU = 11.39
+===> construction_vehicle - IoU = 4.53
+===> motorcycle - IoU = 1.71
+===> pedestrian - IoU = 2.13
+===> traffic_cone - IoU = 4.63
+===> trailer - IoU = 9.81
+===> truck - IoU = 6.56
+===> driveable_surface - IoU = 60.17
+===> other_flat - IoU = 21.58
+===> sidewalk - IoU = 30.48
+===> terrain - IoU = 33.39
+===> manmade - IoU = 20.45
+===> vegetation - IoU = 17.73
+===> mIoU of 4818 samples: 14.95
+=== FUTURE 3s (B-freeze-model-current) ===
+===> per class IoU of 4818 samples:
+===> others - IoU = 0.48
+===> barrier - IoU = 12.76
+===> bicycle - IoU = 1.79
+===> bus - IoU = 8.19
+===> car - IoU = 9.13
+===> construction_vehicle - IoU = 3.71
+===> motorcycle - IoU = 1.34
+===> pedestrian - IoU = 1.7
+===> traffic_cone - IoU = 4.05
+===> trailer - IoU = 7.53
+===> truck - IoU = 5.62
+===> driveable_surface - IoU = 57.01
+===> other_flat - IoU = 18.56
+===> sidewalk - IoU = 27.87
+===> terrain - IoU = 29.05
+===> manmade - IoU = 17.69
+===> vegetation - IoU = 15.65
+===> mIoU of 4818 samples: 13.07
