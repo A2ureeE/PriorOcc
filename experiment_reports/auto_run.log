@@ -102,3 +102,30 @@ SMP 关闭; align_after_view_transfromation=True
 合成单测: dx=+3.02/dy=+5.00 PASS; 静态区=0 PASS; 零初始化 PASS
 dry-load: 感知 559 全命中, 0 失配, prior_corr 仅 2 零初始化张量
 ----
+
+---- [dyn_boost 安全阀 2026-10-22 14:33:09] ----
+改动: F.relu(dyn_boost) → torch.tanh(dyn_boost)
+原因: ReLU 无上界(x=10 → 11x 爆炸风险); tanh 有界(≤2x)且初始严格恒等(tanh(0)=0 → 因子=1)
+数值验证: x=10: ReLU→11x(危险) tanh→2.00x(安全); x=-1: ReLU→1x(死区) tanh→0.54x(允许抑制)
+对当前 PCF 训练零影响: enable_dyn_boost=False → dyn_boost=None → 此分支不执行
+----
+2026-10-22 16:16:29 [pcf-eval] PCF ep2: 暂停训练
+2026-10-22 16:16:33 [pcf-eval] PCF ep2: 600 帧三口径评测
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 CURRENT mIoU/dyn/sta/cont6 = 34.05 27.32 43.66 49.45
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 MODEL 1s mIoU/dyn/sta/cont6 = 18.77 8.95 32.81 37.79
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 MODEL 2s mIoU/dyn/sta/cont6 = 14.77 5.67 27.78 32.26
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 MODEL 3s mIoU/dyn/sta/cont6 = 12.90 4.40 25.04 29.18
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 B档   1s mIoU/dyn/sta/cont6 = 19.05 10.48 31.30 35.96
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 B档   2s mIoU/dyn/sta/cont6 = 15.02 7.33 26.02 30.14
+2026-10-22 16:19:28 [pcf-eval] PCF ep2 B档   3s mIoU/dyn/sta/cont6 = 13.11 5.97 23.31 27.15
+2026-10-22 16:19:28 [pcf-eval] PCF ep2: 续训
+2026-10-22 16:21:28 [pcf-eval] 等待 epoch_4_ema.pth（PCF）
+2026-10-22 16:44:12 [pcf-eval] 等待 epoch_2_ema.pth（PCF）
+
+---- [PCF+boost 启动 2026-10-22 16:44:44] ----
+用户裁定方案C': 从 PCF ep2 热启 + enable_dyn_boost=True
+resume-from 因 optimizer param group size mismatch 失败(新参数 dyn_boost 导致), 改用 load_from
+代价: epoch 重置为 0(跑 6 轮而非 4 轮), optimizer 动量重建(~200 iter), 亏损 ~1h vs 方案A
+收益: trainable 50→51(dyn_boost), loss_occ_future_1s 起步 0.324(vs 全新跑 0.389)
+安全阀: tanh 上界 2x, 初始恒等(tanh(0)=0)
+----

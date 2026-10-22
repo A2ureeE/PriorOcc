@@ -1,6 +1,7 @@
 import inspect
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.runner import force_fp32
 from mmdet3d.models import DETECTORS, builder
