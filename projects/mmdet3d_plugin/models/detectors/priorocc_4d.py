@@ -92,6 +92,7 @@ class PriorOcc4D(BEVDepth4DOCC):
                  sep_perception=False,
                  enable_prior_correspondence=False,
                  prior_correspondence=None,
+                 enable_dyn_boost=False,
                  enable_multimodal=False,
                  num_modes=3,
                  mode_cls_loss_weight=0.5,
@@ -143,6 +144,10 @@ class PriorOcc4D(BEVDepth4DOCC):
         self.continuity_apply_occ = continuity_apply_occ
         self.enable_prior_correspondence = enable_prior_correspondence
         self._prior_correspondence_cfg = prior_correspondence
+        # Dynamic attention boost: amplify BEV features in dynamic regions
+        # so the predictor's GRU/gate allocates more capacity there.
+        # Zero-init → no effect at start; learned during training.
+        self.dyn_boost = nn.Parameter(torch.zeros(1)) if enable_dyn_boost else None
         self.freeze_perception = freeze_perception
         self.frozen_prefixes = tuple(
             freeze_perception_prefixes or PERCEPTION_PREFIXES)
@@ -733,6 +738,12 @@ class PriorOcc4D(BEVDepth4DOCC):
                     B, self.num_future, 2, H, W,
                     device=refined_bev.device, dtype=refined_bev.dtype)
 
+            # Dynamic attention boost: amplify features in dynamic regions
+            # so the predictor's GRU/gate allocates more capacity there.
+            if self.dyn_boost is not None and motion_aux is not None:
+                refined_bev = refined_bev * (
+                    1 + F.relu(self.dyn_boost) * motion_aux['dyn_mask'])
+
             if self.enable_multimodal and flow is not None and \
                     flow.dim() == 6:
                 # K-mode winner-take-all path (loss keys stay compatible
@@ -821,6 +832,11 @@ class PriorOcc4D(BEVDepth4DOCC):
                 flow = torch.zeros(
                     B, self.num_future, 2, H, W,
                     device=refined_bev.device, dtype=refined_bev.dtype)
+
+            # Dynamic attention boost (same as forward_train)
+            if self.dyn_boost is not None and motion_aux is not None:
+                refined_bev = refined_bev * (
+                    1 + F.relu(self.dyn_boost) * motion_aux['dyn_mask'])
 
             if self.enable_multimodal and flow is not None and \
                     flow.dim() == 6:
