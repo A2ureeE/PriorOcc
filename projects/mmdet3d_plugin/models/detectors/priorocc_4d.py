@@ -4,8 +4,16 @@ import torch
 import torch.nn.functional as F
 from mmcv.runner import force_fp32
 from mmdet3d.models import DETECTORS, builder
+from torch.nn.modules.batchnorm import _BatchNorm
 
 from .bevdet_occ import BEVDepth4DOCC
+
+# Perception sub-modules that turn images into the current-frame occupancy.
+# Stage-1 (single-frame perception) trains them; stage-2 freezes them and only
+# trains the future head ("perception / forecasting decoupling").
+PERCEPTION_PREFIXES = (
+    'img_backbone', 'img_neck', 'semantic_injector', 'img_view_transformer',
+    'img_bev_encoder_backbone', 'img_bev_encoder_neck', 'occ_head')
 
 
 @DETECTORS.register_module()
@@ -37,6 +45,14 @@ class PriorOcc4D(BEVDepth4DOCC):
         delta_combiner: config dict for per-class delta combiner.
         scmf: config dict for SCMF module.
         future_predictor: config dict for future predictor.
+        freeze_perception: freeze img_backbone / img_neck /
+            semantic_injector / img_view_transformer / img_bev_encoder_* /
+            occ_head so that only the future head trains (stage-2).
+        freeze_perception_prefixes: override the frozen module prefixes.
+        sep_perception: feed only the current-frame BEV feature to the BEV
+            encoder (64-ch input) while still producing history BEV features
+            for the motion branch. Required to inherit stage-1 perception
+            weights 1:1 when freezing it.
     """
 
     def __init__(self,
@@ -71,6 +87,9 @@ class PriorOcc4D(BEVDepth4DOCC):
                  sem_continuity=None,
                  sem_continuity_loss_weights=None,
                  continuity_apply_occ=False,
+                 freeze_perception=False,
+                 freeze_perception_prefixes=None,
+                 sep_perception=False,
                  enable_multimodal=False,
                  num_modes=3,
                  mode_cls_loss_weight=0.5,
@@ -118,6 +137,10 @@ class PriorOcc4D(BEVDepth4DOCC):
         self._sem_continuity_cfg = sem_continuity
 
         self.continuity_apply_occ = continuity_apply_occ
+        self.freeze_perception = freeze_perception
+        self.frozen_prefixes = tuple(
+            freeze_perception_prefixes or PERCEPTION_PREFIXES)
+        self.sep_perception = sep_perception
         self.enable_multimodal = enable_multimodal
         self.num_modes = num_modes
         self.mode_cls_loss_weight = mode_cls_loss_weight
@@ -144,6 +167,38 @@ class PriorOcc4D(BEVDepth4DOCC):
         self.sem_continuity = None
 
         self._build_4d_modules()
+
+        if self.freeze_perception:
+            n_frozen = self._apply_freeze()
+            print(f'[PriorOcc4D] freeze_perception=True, '
+                  f'{n_frozen} perception tensors frozen; trainable = '
+                  f'{sum(p.requires_grad for p in self.parameters())}')
+
+    # ------------------------------------------------------------------
+    # perception freezing (stage-2 only)
+    # ------------------------------------------------------------------
+    def _is_frozen_param(self, name):
+        return any(name == p or name.startswith(p + '.')
+                   for p in self.frozen_prefixes)
+
+    def _apply_freeze(self):
+        """Set ``requires_grad=False`` on every perception tensor."""
+        n_frozen = 0
+        for name, param in self.named_parameters():
+            if self._is_frozen_param(name):
+                param.requires_grad = False
+                n_frozen += 1
+        return n_frozen
+
+    def train(self, mode=True):
+        """Keep frozen BN statistics fixed while the future head trains."""
+        super(PriorOcc4D, self).train(mode)
+        if mode and self.freeze_perception:
+            for name, module in self.named_modules():
+                if isinstance(module, _BatchNorm) and \
+                        self._is_frozen_param(name):
+                    module.eval()
+        return self
 
     def _build_4d_modules(self):
         """Build 4D motion modules from config."""
@@ -421,8 +476,15 @@ class PriorOcc4D(BEVDepth4DOCC):
                     bev_feat_list[adj_id],
                     [sensor2keyegos[0], sensor2keyegos[adj_id]], bda)
 
-        bev_feat = torch.cat(bev_feat_list, dim=1)
-        x = self.bev_encoder(bev_feat)
+        if self.sep_perception:
+            # Decoupled perception (stage-2): the frozen single-frame BEV
+            # encoder only sees the current frame (numC_Trans channels), so
+            # every perception tensor can be inherited 1:1 from stage 1.
+            # History BEV features are still produced for the motion branch.
+            enc_input = bev_feat_list[0]
+        else:
+            enc_input = torch.cat(bev_feat_list, dim=1)
+        x = self.bev_encoder(enc_input)
         key_frame_metas = (
             sensor2keyegos[0], ego2globals[0], intrins[0],
             post_rots[0], post_trans[0], bda)
@@ -459,12 +521,12 @@ class PriorOcc4D(BEVDepth4DOCC):
             refined_bev: (B, C, H, W) — possibly delta-combiner enriched.
             semantic_masks: optional list of masks for semantic consistency.
         """
-        if self.scmf is None or self.bev_projector is None:
+        if self.bev_projector is None:
             if return_semantic_masks:
                 return None, fused_bev, None, None
             return None, fused_bev
 
-        seg_logits_key = seg_logits_list[0]
+        seg_logits_key = seg_logits_list[0] if seg_logits_list else None
         if seg_logits_key is None:
             if return_semantic_masks:
                 return None, fused_bev, None, None
@@ -472,6 +534,20 @@ class PriorOcc4D(BEVDepth4DOCC):
 
         semantic_bev, visibility = self.bev_projector(
             seg_logits_key, depth, self.img_view_transformer, key_frame_metas)
+
+        # Perception-only mode (stage-1 single-frame training): no future is
+        # predicted, so the whole SCMF chain is dead weight. Keep the BEV
+        # semantic branch only, as a target for the hole-filling loss.
+        motion_chain = all(x is not None for x in (
+            self.scmf, self.motion_encoder, self.semantic_attention,
+            self.dyn_sta_decoder))
+        if not motion_chain:
+            if return_semantic_masks:
+                motion_aux = dict(
+                    per_cls_masks=None, sta_mask=None, dyn_mask=None,
+                    semantic_bev=semantic_bev, visibility=visibility)
+                return None, fused_bev, None, motion_aux
+            return None, fused_bev
 
         dyn_mask, sta_mask, per_cls_masks = self.dyn_sta_decoder(
             semantic_bev, visibility)

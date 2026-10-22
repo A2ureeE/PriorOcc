@@ -1,0 +1,89 @@
+2026-10-22 02:06:15 ==================== AUTO PIPELINE START ====================
+2026-10-22 02:06:15 [Step0] EP21=/root/priorocc/PriorOcc/ckpts/priorocc-singleframe-ep21.pth
+2026-10-22 02:06:15 [Step0] 基础配置 OK; A=projects/configs/priorocc/priorocc-r50-holefill-ab-A.py B=projects/configs/priorocc/priorocc-r50-holefill-ab-B.py S2=projects/configs/priorocc/priorocc-4d-r50-sep-frozen.py
+2026-10-22 02:06:15 [Step0] 预算: A/B 各 1 轮约 53min 训练 + 14min 评测；分支一另加 7 轮(6.2h)
+2026-10-22 02:06:15 [Step0] 4D 阶段2: 6 轮 × ~2.2h + 3 次 runner 内全量评测
+2026-10-22 02:06:15 [Step1-A] 训练开始（1 轮, lr 1e-5, 补洞 ON, cont_occ=0）
+2026-10-22 02:53:21 [Step1-A] 训练完成，评测全量 4818（非 EMA + EMA）
+2026-10-22 03:00:27 [Step1-A] ===> mIoU of 4818 samples: 33.63 (非EMA)
+2026-10-22 03:00:27 [Step1-A] ===> mIoU of 4818 samples: 33.74 (EMA)
+2026-10-22 03:00:27 [Step1-B] 训练开始（1 轮, lr 1e-5, 补洞 OFF）
+2026-10-22 03:46:15 [Step1-B] 训练完成，评测全量 4818（非 EMA + EMA）
+2026-10-22 03:53:35 [Step1-B] ===> mIoU of 4818 samples: 33.61 (非EMA)
+2026-10-22 03:53:35 [Step1-B] ===> mIoU of 4818 samples: 33.74 (EMA)
+2026-10-22 03:53:35 [Step2] 判定（判据: A.mIoU>=B.mIoU 且 A 小类均值>=B，容差 0.05）
+---- hole-filling A/B (ep1, non-EMA, full 4818) ----
+A(on) : mIoU 33.63 | ped/bike/moto 17.51 (pedestrian 19.68, bicycle 15.76, motorcycle 17.09) | /root/autodl-tmp/dataforpriorocc/auto/eval_A_ep1.log
+B(off): mIoU 33.61 | ped/bike/moto 17.48 (pedestrian 19.69, bicycle 15.75, motorcycle 16.99) | /root/autodl-tmp/dataforpriorocc/auto/eval_B_ep1.log
+delta(A-B): mIoU +0.02 | small-class +0.03 | tol 0.05
+---- corroboration (EMA) ----
+A(on) : mIoU 33.74 | ped/bike/moto 17.59 (pedestrian 19.67, bicycle 15.96, motorcycle 17.14) | /root/autodl-tmp/dataforpriorocc/auto/eval_A_ep1ema.log
+B(off): mIoU 33.74 | ped/bike/moto 17.58 (pedestrian 19.69, bicycle 15.93, motorcycle 17.12) | /root/autodl-tmp/dataforpriorocc/auto/eval_B_ep1ema.log
+delta(A-B) EMA: mIoU +0.00 | small +0.01
+JUDGE 33.63 33.61 17.51 17.48
+VERDICT=useful
+REASON: A 在总 mIoU 与小类均值上均不低于 B（容差内）
+2026-10-22 03:53:35 [Step3] BRANCH=holefill_useful
+/root/autodl-tmp/dataforpriorocc/auto/eval_A_ep1.log  (4818 samples, mIoU 33.63)
+baseline: /root/autodl-tmp/dataforpriorocc/auto/eval_B_ep1.log  (4818 samples, mIoU 33.61)
+                        baseline       new     delta
+[group] mIoU               33.61     33.63     +0.02
+[group] dynamic            27.09     27.11     +0.03
+[group] static             42.92     42.93     +0.01
+[group] continuous         48.83     48.84     +0.01
+
+driveable_surface          79.53     79.56     +0.03 <- continuous
+other_flat                 39.11     39.03     -0.08 <- continuous
+sidewalk                   50.11     50.13     +0.02 <- continuous
+terrain                    53.37     53.40     +0.03 <- continuous
+manmade                    38.21     38.24     +0.03 <- continuous
+vegetation                 32.67     32.67     +0.00 <- continuous
+others                      7.46      7.47     +0.01
+barrier                    39.60     39.75     +0.15
+bicycle                    15.75     15.76     +0.01
+bus                        38.26     38.30     +0.04
+car                        44.70     44.73     +0.03
+construction_vehicle       17.31     17.22     -0.09
+motorcycle                 16.99     17.09     +0.10
+pedestrian                 19.69     19.68     -0.01
+traffic_cone               18.61     18.47     -0.14
+trailer                    28.33     28.51     +0.18
+truck                      31.64     31.63     -0.01
+2026-10-22 03:53:35 [Step4-1a] 补洞有用 → A 配置续到 8 轮产出 SF8（从 ep1 续，不重跑第 1 轮）
+
+---- [人工复核 note 2026-10-22 04:03:58] ----
+1) A/B 效应量: Δ(A-B)=+0.02(非EMA)/+0.00(EMA)、小类 +0.03/+0.01 —— 均落在 0.05 容差内，属噪声级。
+   按任务书预登记规则(A>=B 即有用)判 useful，但这是'不更差'，不是'确有增益'；8 轮后才有分辨力。
+2) lr 诊断确认: 1e-4 续训 1 轮 → 33.83→31.87(-1.96, EMA)；1e-5 → 33.74(-0.09)。
+   即之前的大跌是 lr 过大(10x)，与补洞无关；本轮 1e-5 下训练 CE 恒定在 0.164~0.170 未抬升，佐证模型留在收敛盆地。
+3) 两臂均比 EP21 低约 0.1~0.2 = 1 轮微调的固有漂移，与补洞开关无关。
+4) 后续全自动: ep2..8 (约 5.3h) → SF8=epoch_8_ema.pth → 全量评测 → 冻结感知训未来头 6 轮(caps[12,24,36]+non-AR) → 全量三口径评测 → 末尾自动写结论。
+----
+2026-10-22 08:57:23 FATAL: 缺少产物 /root/autodl-tmp/dataforpriorocc/work_dirs/ab-on/epoch_8_ema.pth （见 /root/autodl-tmp/dataforpriorocc/auto/train_A8.log）
+2026-10-22 08:57:23 === 流水线安全停止（未启动任何长训练）===
+
+---- [人工决策 2026-10-22 08:58:15] ep8 停训 + ep4/ep5 择优 ----
+按用户裁定：ep8 不练满，补测 ep5 后与 ep4 对比择优进入阶段2。
+600帧固定子集(4818池 stride8) EMA 曲线: ep21 33.96 | ep2 33.71 | ep4 34.05 | ep5 34.00 | ep6 34.02 | ep7 34.02
+连续类(6): ep21 49.27 | ep4 49.46 | ep5 49.36 | ep6 49.34 | ep7 49.29
+判定: ep4 胜出(mIoU 34.05 最高, 连续类 49.46 最高, 动态 27.32 与 ep5 并列) → 骨干 = /root/autodl-tmp/dataforpriorocc/work_dirs/ab-on/epoch_4_ema.pth
+偏差说明: 8轮曲线在 ep4 后即平台化(ep5-7 34.00~34.02), 继续训无增益, 与停训裁定一致。
+----
+2026-10-22 09:02:07 [finish] 等待阶段2 产出 epoch_6_ema.pth（最多 20h）
+2026-10-22 09:04:47 [oom-guard] 阶段2 未 OOM（或已被主流水线完成），守护退出
+
+---- [故障与修复 2026-10-22 12:35:39] ----
+阶段2 在 epoch2 末的全量评测处崩溃: mmdet single_gpu_test 用 result[0] 取单样本输出, 而 PriorOcc4D.simple_test 返回 dict(occ_current/occ_future) → KeyError: 0。
+结论: --validate 与本检测器不兼容(这也是此前 4D run 从不带 --validate 的原因)。权重未损坏: epoch_1/2.pth 与 EMA 完好, latest→epoch_2。
+修复: 去掉 --validate, 从 epoch_2 --auto-resume 续到 6 轮; 评测改由 eval_b_baseline.py 在 ckpt 边界独立做(收尾脚本已挂)。
+代价: 白等约 1h(11:35 崩 → 12:36 重启), 已训的 2 轮不浪费。
+----
+2026-10-22 12:42:44 [even-eval] 等待 epoch_4.pth（最多 12h）
+
+---- [阶段2 ep2 偶数轮评测 2026-10-22 12:43:02] 600帧 MODEL vs B档 ----
+当前帧 34.05/27.32/43.66/49.45 (与冻结骨干 ep4_ema 一致 => 冻结生效)
+MODEL 1s 17.94/8.15 | 2s 14.37/5.35 | 3s 12.76/4.47 (mIoU/dyn)
+B档  1s 19.05/10.48 | 2s 15.02/7.33 | 3s 13.11/5.97
+动态 Δ(MODEL-B) = -2.33/-1.98/-1.50 => 新初始化未来头仅训2轮, 暂不如抄当前帧, 属正常起步; 判据看 ep4/ep6 是否收窄并转正
+runner 内建评测不可用(dict 输出 vs mmdet single_gpu_test 取 result[0]); 偶数轮评测改由 stage2_even_eval.sh 在 ckpt 边界暂停->独立脚本->续训
+----

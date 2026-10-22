@@ -79,7 +79,19 @@ class SemanticConditionedMotionField(nn.Module):
         self.bev_channels = bev_channels
         self.num_semantic_classes = num_semantic_classes
         self.num_future = num_future
-        self.max_flow_cells = max_flow_cells
+        # per-horizon flow caps (BEV cells). Accept a scalar (backward
+        # compatible) or a list of length num_future, e.g. [12, 24, 36]:
+        # GT displacements have p90 ~8.6/14.1/17.9 cells at 1s/2s/3s, so a
+        # single 5-cell cap (=2.56 m) physically cannot reach moving objects.
+        if isinstance(max_flow_cells, (list, tuple)):
+            assert len(max_flow_cells) == num_future, \
+                f'max_flow_cells len {len(max_flow_cells)} != num_future ' \
+                f'{num_future}'
+            self._per_horizon_caps = [float(c) for c in max_flow_cells]
+            self.max_flow_cells = max(self._per_horizon_caps)
+        else:
+            self._per_horizon_caps = None
+            self.max_flow_cells = float(max_flow_cells)
 
         in_channels = bev_channels * 3 + num_semantic_classes
         self.decoder = nn.Sequential(
@@ -118,8 +130,14 @@ class SemanticConditionedMotionField(nn.Module):
             [fused_bev, motion_feat, attention_feature, semantic_bev], dim=1)
         x = self.decoder(x)
         raw_flow = self.motion_head(x)
-        flow = torch.tanh(raw_flow) * self.max_flow_cells
+        flow = torch.tanh(raw_flow)
         flow = flow.view(B, self.num_future, 2, H, W)
+        if self._per_horizon_caps is not None:
+            caps = flow.new_tensor(self._per_horizon_caps).view(
+                1, self.num_future, 1, 1, 1)
+            flow = flow * caps
+        else:
+            flow = flow * self.max_flow_cells
         return flow
 
 
@@ -170,12 +188,17 @@ class SCMFEnhancedPredictor(nn.Module):
                  bev_channels=256,
                  num_future=3,
                  hidden_dim=256,
-                 use_warp_validity=False):
+                 use_warp_validity=False,
+                 non_autoregressive=False,
+                 gate_init_bias=0.0):
         super().__init__()
         self.bev_channels = bev_channels
         self.num_future = num_future
         self.hidden_dim = hidden_dim
         self.use_warp_validity = use_warp_validity
+        # non_autoregressive=True: every horizon warps the SAME current BEV,
+        # removing error accumulation through the autoregressive chain.
+        self.non_autoregressive = non_autoregressive
 
         self.warper = MotionFieldWarper(direction='forward')
         self.conv_gru = ConvGRU2D(bev_channels, hidden_dim)
@@ -193,6 +216,11 @@ class SCMFEnhancedPredictor(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(bev_channels, 1, kernel_size=1, bias=True),
             nn.Sigmoid())
+        # Positive bias pushes alpha=sigmoid(b) towards the warp branch, so the
+        # model starts at/above a frozen copy (alpha=1 => identity warp) and
+        # can only improve from there.
+        if gate_init_bias:
+            nn.init.constant_(self.gate[-2].bias, gate_init_bias)
 
     def forward(self, bev_current, flow):
         """Args:
@@ -214,15 +242,18 @@ class SCMFEnhancedPredictor(nn.Module):
         future_bevs = []
         for k in range(self.num_future):
             flow_k = flow[:, k]
+            # Non-autoregressive: all horizons warp the same current BEV so a
+            # wrong flow at 1s cannot be compounded into 2s/3s.
+            src = bev_current if self.non_autoregressive else prev_bev
             if self.use_warp_validity:
                 coarse_k, validity_k = self.warper(
-                    prev_bev, flow_k, return_validity=True)
+                    src, flow_k, return_validity=True)
             else:
-                coarse_k = self.warper(prev_bev, flow_k)
-            hx = self.conv_gru(prev_bev, hx)
+                coarse_k = self.warper(src, flow_k)
+            hx = self.conv_gru(src, hx)
             delta_k = self.gru_proj(hx)
-            refined_k = prev_bev + delta_k
-            gate_feats = [prev_bev, coarse_k, delta_k]
+            refined_k = src + delta_k
+            gate_feats = [src, coarse_k, delta_k]
             if self.use_warp_validity:
                 gate_feats.append(validity_k)
             alpha = self.gate(torch.cat(gate_feats, dim=1))
@@ -314,7 +345,8 @@ class MultimodalSemanticConditionedMotionField(nn.Module):
         num_semantic_classes: number of semantic classes.
         num_future: number of future timesteps (T).
         num_modes: number of motion modes (K).
-        max_flow_cells: max flow magnitude in BEV cells.
+        max_flow_cells: max flow magnitude in BEV cells (scalar or a
+            per-horizon list, cf. SemanticConditionedMotionField).
         hidden_dim: hidden dimension in decoder.
         mode_bias_cells: per-mode initial flow separation (BEV cells).
         norm_cfg: normalization config.
@@ -334,7 +366,15 @@ class MultimodalSemanticConditionedMotionField(nn.Module):
         self.num_semantic_classes = num_semantic_classes
         self.num_future = num_future
         self.num_modes = num_modes
-        self.max_flow_cells = max_flow_cells
+        if isinstance(max_flow_cells, (list, tuple)):
+            assert len(max_flow_cells) == num_future, \
+                f'max_flow_cells len {len(max_flow_cells)} != num_future ' \
+                f'{num_future}'
+            self._per_horizon_caps = [float(c) for c in max_flow_cells]
+            self.max_flow_cells = max(self._per_horizon_caps)
+        else:
+            self._per_horizon_caps = None
+            self.max_flow_cells = float(max_flow_cells)
         self.mode_bias_cells = mode_bias_cells
 
         in_channels = bev_channels * 3 + num_semantic_classes
@@ -357,7 +397,8 @@ class MultimodalSemanticConditionedMotionField(nn.Module):
         # (k - (K-1)/2) * mode_bias_cells so that WTA gradients diverge from
         # step 1. Invert tanh*max_flow to place the offset in raw-logit space.
         with torch.no_grad():
-            target = min(mode_bias_cells / max(max_flow_cells, 1e-6), 0.9)
+            target = min(
+                mode_bias_cells / max(self.max_flow_cells, 1e-6), 0.9)
             raw_off = math.atanh(target)
             bias = self.motion_head.bias.view(num_modes, num_future, 2)
             bias.zero_()
@@ -383,8 +424,14 @@ class MultimodalSemanticConditionedMotionField(nn.Module):
             [fused_bev, motion_feat, attention_feature, semantic_bev], dim=1)
         x = self.decoder(x)
         raw_flow = self.motion_head(x)  # (B, K*T*2, H, W)
-        flow = torch.tanh(raw_flow) * self.max_flow_cells
+        flow = torch.tanh(raw_flow)
         flow = flow.view(B, self.num_modes, self.num_future, 2, H, W)
+        if self._per_horizon_caps is not None:
+            caps = flow.new_tensor(self._per_horizon_caps).view(
+                1, 1, self.num_future, 1, 1, 1)
+            flow = flow * caps
+        else:
+            flow = flow * self.max_flow_cells
         return flow
 
 
@@ -405,6 +452,9 @@ class MultimodalSCMFEnhancedPredictor(nn.Module):
         num_modes: number of motion modes (K).
         hidden_dim: GRU hidden dimension.
         use_warp_validity: feed warp validity mask into the gate.
+        non_autoregressive: warp the same current BEV at every horizon
+            instead of chaining the previous prediction.
+        gate_init_bias: initial gate bias (positive favours the warp branch).
     """
 
     def __init__(self,
@@ -412,13 +462,16 @@ class MultimodalSCMFEnhancedPredictor(nn.Module):
                  num_future=3,
                  num_modes=3,
                  hidden_dim=256,
-                 use_warp_validity=False):
+                 use_warp_validity=False,
+                 non_autoregressive=False,
+                 gate_init_bias=0.0):
         super().__init__()
         self.bev_channels = bev_channels
         self.num_future = num_future
         self.num_modes = num_modes
         self.hidden_dim = hidden_dim
         self.use_warp_validity = use_warp_validity
+        self.non_autoregressive = non_autoregressive
 
         self.warper = MotionFieldWarper(direction='forward')
         self.conv_gru = ConvGRU2D(bev_channels, hidden_dim)
@@ -435,6 +488,8 @@ class MultimodalSCMFEnhancedPredictor(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(bev_channels, 1, kernel_size=1, bias=True),
             nn.Sigmoid())
+        if gate_init_bias:
+            nn.init.constant_(self.gate[-2].bias, gate_init_bias)
 
     def _run_chain(self, bev_current, flow_mode):
         """Run one auto-regressive chain for a single mode.
@@ -455,15 +510,16 @@ class MultimodalSCMFEnhancedPredictor(nn.Module):
         chain = []
         for t in range(T):
             flow_t = flow_mode[:, t]
+            src = bev_current if self.non_autoregressive else prev_bev
             if self.use_warp_validity:
                 coarse_t, validity_t = self.warper(
-                    prev_bev, flow_t, return_validity=True)
+                    src, flow_t, return_validity=True)
             else:
-                coarse_t = self.warper(prev_bev, flow_t)
-            hx = self.conv_gru(prev_bev, hx)
+                coarse_t = self.warper(src, flow_t)
+            hx = self.conv_gru(src, hx)
             delta_t = self.gru_proj(hx)
-            refined_t = prev_bev + delta_t
-            gate_feats = [prev_bev, coarse_t, delta_t]
+            refined_t = src + delta_t
+            gate_feats = [src, coarse_t, delta_t]
             if self.use_warp_validity:
                 gate_feats.append(validity_t)
             alpha = self.gate(torch.cat(gate_feats, dim=1))

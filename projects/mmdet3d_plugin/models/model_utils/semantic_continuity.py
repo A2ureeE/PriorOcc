@@ -54,7 +54,30 @@ class SemanticContinuityLoss(nn.Module):
             torch.tensor(list(continuous_class_ids), dtype=torch.long))
 
     @staticmethod
-    def _weighted_tv(field, weight, eps):
+    def _tv_terms(field, weight):
+        """Unnormalized confidence-weighted total variation of a field.
+
+        Args:
+            field: (..., K, d0, d1) class probabilities for K continuous classes,
+                spatial dims are the last two.
+            weight: (..., 1, d0, d1) detached per-cell confidence.
+
+        Returns:
+            (num, den) — accumulate both before dividing so that slab-wise
+            (z-chunked) evaluation stays mathematically identical.
+        """
+        K = field.shape[-3]
+        # field: (..., K, d0, d1); weight: (..., 1, d0, d1)
+        dx = field[..., 1:] - field[..., :-1]        # diff along d1 -> (...,K,d0,d1-1)
+        dy = field[..., 1:, :] - field[..., :-1, :]  # diff along d0 -> (...,K,d0-1,d1)
+        wx = torch.min(weight[..., :-1], weight[..., 1:]).detach()          # (...,1,d0,d1-1)
+        wy = torch.min(weight[..., :-1, :], weight[..., 1:, :]).detach()    # (...,1,d0-1,d1)
+        num = (wx * dx.abs()).sum() + (wy * dy.abs()).sum()
+        den = wx.sum() * K + wy.sum() * K
+        return num, den
+
+    @classmethod
+    def _weighted_tv(cls, field, weight, eps):
         """Confidence-weighted mean total variation of a probability field.
 
         Args:
@@ -66,15 +89,8 @@ class SemanticContinuityLoss(nn.Module):
         Returns:
             scalar weighted TV.
         """
-        K = field.shape[-3]
-        # field: (..., K, d0, d1); weight: (..., 1, d0, d1)
-        dx = field[..., 1:] - field[..., :-1]        # diff along d1 -> (...,K,d0,d1-1)
-        dy = field[..., 1:, :] - field[..., :-1, :]  # diff along d0 -> (...,K,d0-1,d1)
-        wx = torch.min(weight[..., :-1], weight[..., 1:]).detach()          # (...,1,d0,d1-1)
-        wy = torch.min(weight[..., :-1, :], weight[..., 1:, :]).detach()    # (...,1,d0-1,d1)
-        num = (wx * dx.abs()).sum() + (wy * dy.abs()).sum()
-        den = wx.sum() * K + wy.sum() * K + eps
-        return num / den
+        num, den = cls._tv_terms(field, weight)
+        return num / (den + eps)
 
     def forward(self,
                 seg_logits_key=None,
@@ -122,18 +138,27 @@ class SemanticContinuityLoss(nn.Module):
 
         # ---- 3D occupancy continuity (optional) ----
         if occ_logits is not None:
-            po = torch.softmax(occ_logits.float(), dim=-1)  # (B,Dx,Dy,Dz,C_occ)
-            cont_occ = cont[cont < po.shape[-1]]
-            po_cont = po[..., cont_occ]  # (B,Dx,Dy,Dz,K)
-            conf = po[..., cont_occ].sum(dim=-1, keepdim=True)  # (B,Dx,Dy,Dz,1)
-            if mask_camera is not None:
-                conf = conf * mask_camera.float().unsqueeze(-1)
-            # TV over Dx (dim1) and Dy (dim2); move K to a leading-ish axis.
-            # Rearrange to (..., K, d0, d1) with d0=Dy, d1=Dx per _weighted_tv.
-            field = po_cont.permute(0, 3, 4, 2, 1)  # (B,Dz,K,Dy,Dx)
-            w = conf.permute(0, 3, 4, 2, 1)         # (B,Dz,1,Dy,Dx)
-            out['loss_sem_continuity_occ'] = self._weighted_tv(
-                field, w, self.eps)
+            cont_occ = cont[cont < occ_logits.shape[-1]]
+            # Slab-wise over the z axis: a full softmax over
+            # (B, Dx, Dy, Dz, 18) at 200x200x16 fp32 costs ~1.8 GB per batch
+            # item just to smooth 6 continuous classes. Numerically stable
+            # subset softmax keeps the same value with ~1/18 of the memory.
+            num, den = 0.0, 0.0
+            for z in range(occ_logits.shape[3]):
+                logits_z = occ_logits[:, :, :, z, :].float()
+                lse = torch.logsumexp(logits_z, dim=-1, keepdim=True)
+                po_cont = torch.exp(logits_z[..., cont_occ] - lse)  # (B,Dx,Dy,K)
+                conf = po_cont.sum(dim=-1, keepdim=True)
+                if mask_camera is not None:
+                    conf = conf * \
+                        mask_camera[:, :, :, z].float().unsqueeze(-1)
+                # -> (B, K, Dy, Dx) / (B, 1, Dy, Dx) as _tv_terms expects
+                field = po_cont.permute(0, 3, 2, 1)
+                w = conf.permute(0, 3, 2, 1)
+                n_z, d_z = self._tv_terms(field, w)
+                num = num + n_z
+                den = den + d_z
+            out['loss_sem_continuity_occ'] = num / (den + self.eps)
         else:
             out['loss_sem_continuity_occ'] = None
 
