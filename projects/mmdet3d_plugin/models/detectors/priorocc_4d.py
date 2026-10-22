@@ -742,7 +742,7 @@ class PriorOcc4D(BEVDepth4DOCC):
             # so the predictor's GRU/gate allocates more capacity there.
             if self.dyn_boost is not None and motion_aux is not None:
                 refined_bev = refined_bev * (
-                    1 + F.relu(self.dyn_boost) * motion_aux['dyn_mask'])
+                    1 + torch.tanh(self.dyn_boost) * motion_aux['dyn_mask'])
 
             if self.enable_multimodal and flow is not None and \
                     flow.dim() == 6:
@@ -836,7 +836,7 @@ class PriorOcc4D(BEVDepth4DOCC):
             # Dynamic attention boost (same as forward_train)
             if self.dyn_boost is not None and motion_aux is not None:
                 refined_bev = refined_bev * (
-                    1 + F.relu(self.dyn_boost) * motion_aux['dyn_mask'])
+                    1 + torch.tanh(self.dyn_boost) * motion_aux['dyn_mask'])
 
             if self.enable_multimodal and flow is not None and \
                     flow.dim() == 6:
