@@ -129,3 +129,14 @@ resume-from 因 optimizer param group size mismatch 失败(新参数 dyn_boost �
 收益: trainable 50→51(dyn_boost), loss_occ_future_1s 起步 0.324(vs 全新跑 0.389)
 安全阀: tanh 上界 2x, 初始恒等(tanh(0)=0)
 ----
+2026-10-22 19:21:13 [pcf-eval] PCF+boost ep2: 暂停训练
+2026-10-22 19:21:17 [pcf-eval] PCF+boost ep2: 600 帧三口径评测
+2026-10-22 19:23:13 [pcf-eval] PCF+boost ep2 CURRENT mIoU/dyn/sta/cont6 = 34.05 27.32 43.66 49.45
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 MODEL 1s mIoU/dyn/sta/cont6 = 18.81 8.89 32.98 37.98
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 MODEL 2s mIoU/dyn/sta/cont6 = 14.86 5.67 28.00 32.51
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 MODEL 3s mIoU/dyn/sta/cont6 = 13.02 4.45 25.26 29.42
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 B档   1s mIoU/dyn/sta/cont6 = 19.05 10.48 31.30 35.96
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 B档   2s mIoU/dyn/sta/cont6 = 15.02 7.33 26.02 30.14
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 B档   3s mIoU/dyn/sta/cont6 = 13.11 5.97 23.31 27.15
+2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2: 续训
+2026-10-22 19:25:14 [pcf-eval] 等待 epoch_4_ema.pth（PCF）

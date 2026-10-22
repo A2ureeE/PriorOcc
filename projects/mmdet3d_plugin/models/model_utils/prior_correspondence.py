@@ -205,4 +205,7 @@ class PriorCorrespondenceFlow(nn.Module):
             flow_add[:, k, 0] = dx
             flow_add[:, k, 1] = dy
 
+        # Store velocity for downstream modules (e.g. query future head)
+        self._velocity = torch.cat([v_h, v_w], dim=1)  # (B, 2, H, W)
+
         return flow_add

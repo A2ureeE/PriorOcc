@@ -14,6 +14,7 @@ from .semantic_motion_prior import (SemanticMotionPrior,
     SemanticMultimodalMotionPrior)
 from .semantic_continuity import SemanticContinuityLoss
 from .prior_correspondence import PriorCorrespondenceFlow
+from .query_future_head import SemanticQueryFutureHead
 
 __all__ = [
     'DepthNet', 'SemanticInjector', 'LanguageSelfGating',
@@ -26,4 +27,4 @@ __all__ = [
     'FutureSemanticPredictor', 'SemanticMotionPrior',
     'SemanticContinuityLoss', 'MultimodalSemanticConditionedMotionField',
     'MultimodalSCMFEnhancedPredictor', 'SemanticMultimodalMotionPrior',
-    'PriorCorrespondenceFlow']
+    'PriorCorrespondenceFlow', 'SemanticQueryFutureHead']

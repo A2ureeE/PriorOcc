@@ -94,6 +94,8 @@ class PriorOcc4D(BEVDepth4DOCC):
                  enable_prior_correspondence=False,
                  prior_correspondence=None,
                  enable_dyn_boost=False,
+                 enable_query_future=False,
+                 query_future=None,
                  enable_multimodal=False,
                  num_modes=3,
                  mode_cls_loss_weight=0.5,
@@ -149,6 +151,9 @@ class PriorOcc4D(BEVDepth4DOCC):
         # so the predictor's GRU/gate allocates more capacity there.
         # Zero-init → no effect at start; learned during training.
         self.dyn_boost = nn.Parameter(torch.zeros(1)) if enable_dyn_boost else None
+        self.enable_query_future = enable_query_future
+        self._query_future_cfg = query_future
+        self.query_future_head = None
         self.freeze_perception = freeze_perception
         self.frozen_prefixes = tuple(
             freeze_perception_prefixes or PERCEPTION_PREFIXES)
@@ -252,6 +257,8 @@ class PriorOcc4D(BEVDepth4DOCC):
         if self.enable_flags['prior_correspondence'] and \
                 self._prior_correspondence_cfg:
             self.prior_corr = builder.build_neck(self._prior_correspondence_cfg)
+        if self.enable_query_future and self._query_future_cfg:
+            self.query_future_head = builder.build_neck(self._query_future_cfg)
 
     def loss_2d_seg(self, seg_logits, gt_semantic_2d):
         """Compute 2D semantic segmentation loss.
@@ -728,12 +735,14 @@ class PriorOcc4D(BEVDepth4DOCC):
                 losses['loss_sem_continuity_occ'] = \
                     cont['loss_sem_continuity_occ'] * w['cont_occ']
 
-        if self.future_predictor is not None and \
-                'future_voxel_semantics' in kwargs:
+        has_future_head = (self.future_predictor is not None or
+                            self.query_future_head is not None)
+        if has_future_head and 'future_voxel_semantics' in kwargs:
             future_voxel_semantics = kwargs['future_voxel_semantics']
             future_mask_camera = kwargs.get('future_mask_camera')
 
-            if flow is None and hasattr(self.future_predictor, 'conv_gru'):
+            if flow is None and self.future_predictor is not None and \
+                    hasattr(self.future_predictor, 'conv_gru'):
                 B, C, H, W = refined_bev.shape
                 flow = torch.zeros(
                     B, self.num_future, 2, H, W,
@@ -745,7 +754,26 @@ class PriorOcc4D(BEVDepth4DOCC):
                 refined_bev = refined_bev * (
                     1 + torch.tanh(self.dyn_boost) * motion_aux['dyn_mask'])
 
-            if self.enable_multimodal and flow is not None and \
+            # Query future head: cross-attention with velocity-matching bias
+            # (replaces backward warp; velocity from PCF guides WHERE to look)
+            if self.query_future_head is not None and motion_aux is not None:
+                pcf_vel = getattr(self.prior_corr, '_velocity', None) \
+                    if self.prior_corr is not None else None
+                future_bevs = self.query_future_head(
+                    refined_bev, motion_aux['per_cls_masks'],
+                    motion_aux['dyn_mask'], pcf_vel)
+                for k in range(self.num_future):
+                    future_feat_k = future_bevs[:, k]
+                    future_gt_k = future_voxel_semantics[:, k]
+                    if future_mask_camera is not None:
+                        future_mask_k = future_mask_camera[:, k]
+                    else:
+                        future_mask_k = mask_camera
+                    loss_future = self.forward_occ_train(
+                        future_feat_k, future_gt_k, future_mask_k)
+                    losses[f'loss_occ_future_{k+1}s'] = \
+                        loss_future['loss_occ'] * self.future_loss_weights[k]
+            elif self.enable_multimodal and flow is not None and \
                     flow.dim() == 6:
                 # K-mode winner-take-all path (loss keys stay compatible
                 # with the deterministic schema: loss_occ_future_{t+1}s).
@@ -823,7 +851,8 @@ class PriorOcc4D(BEVDepth4DOCC):
 
         occ_current = self.simple_test_occ(occ_bev_feature, img_metas)
 
-        if self.future_predictor is not None:
+        if self.future_predictor is not None or \
+                self.query_future_head is not None:
             flow, refined_bev, _, motion_aux = self._compute_motion_flow(
                 occ_bev_feature, bev_feat_list, key_frame_metas,
                 seg_logits_list, depth, return_semantic_masks=True)
@@ -838,6 +867,23 @@ class PriorOcc4D(BEVDepth4DOCC):
             if self.dyn_boost is not None and motion_aux is not None:
                 refined_bev = refined_bev * (
                     1 + torch.tanh(self.dyn_boost) * motion_aux['dyn_mask'])
+
+            # Query future head (inference path, same as training)
+            if self.query_future_head is not None and motion_aux is not None:
+                pcf_vel = getattr(self.prior_corr, '_velocity', None) \
+                    if self.prior_corr is not None else None
+                future_bevs = self.query_future_head(
+                    refined_bev, motion_aux['per_cls_masks'],
+                    motion_aux['dyn_mask'], pcf_vel)
+                occ_future = []
+                for k in range(self.num_future):
+                    future_pred = self.simple_test_occ(
+                        future_bevs[:, k], img_metas)
+                    occ_future.append(future_pred)
+                return dict(
+                    occ_current=occ_current,
+                    occ_future=occ_future,
+                    horizons_sec=self.horizons_sec)
 
             if self.enable_multimodal and flow is not None and \
                     flow.dim() == 6:
