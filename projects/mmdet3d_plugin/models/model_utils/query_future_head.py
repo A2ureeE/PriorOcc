@@ -29,7 +29,8 @@ class SemanticQueryFutureHead(nn.Module):
                  window_radius=10,
                  num_semantic_classes=17,
                  horizons_sec=(1.0, 2.0, 3.0),
-                 vel_bias_init=2.0):
+                 vel_bias_init=2.0,
+                 downsample=2):
         super().__init__()
         self.bev_channels = bev_channels
         self.num_future = num_future
@@ -37,6 +38,7 @@ class SemanticQueryFutureHead(nn.Module):
         self.window_radius = window_radius
         self.num_semantic_classes = num_semantic_classes
         self.horizons_sec = list(horizons_sec)
+        self.downsample = downsample
         self.K = (2 * window_radius + 1) ** 2
 
         self.horizon_embed = nn.Embedding(num_future, bev_channels)
@@ -94,32 +96,51 @@ class SemanticQueryFutureHead(nn.Module):
         K = self.K
         d = self.hidden_dim
 
+        # Downsample for memory efficiency: at 200x200, the unfold tensor
+        # (B, d, K, H, W) would be ~9GB per projection → OOM on 24GB GPU.
+        # At 100x100 (2x coarser), it's ~2.3GB. R=10 at coarse resolution
+        # covers ±10m (equiv to R=20 at original), sufficient for all
+        # horizons (3s p90 displacement = 17.9 cells ≈ 9m).
+        ds = self.downsample
+        if ds > 1 and (H % ds == 0) and (W % ds == 0):
+            bev_a = F.avg_pool2d(bev, ds)
+            masks_a = F.avg_pool2d(per_cls_masks, ds)
+            dyn_a = F.avg_pool2d(dyn_mask, ds)
+            vel_a = F.avg_pool2d(velocity, ds) / ds \
+                if velocity is not None else None
+            # velocity / ds: cells are ds× larger at coarse resolution,
+            # so the same physical velocity has ds× smaller cell value
+        else:
+            bev_a, masks_a = bev, per_cls_masks
+            dyn_a, vel_a = dyn_mask, velocity
+        Ha, Wa = bev_a.shape[2], bev_a.shape[3]
+
         # Project K, V once
-        k = self.k_proj(bev)   # (B, d, H, W)
-        v = self.v_proj(bev)   # (B, d, H, W)
+        k = self.k_proj(bev_a)   # (B, d, Ha, Wa)
+        v = self.v_proj(bev_a)   # (B, d, Ha, Wa)
 
         # Unfold: extract all (2R+1)² patches at once
-        # k_unfold: (B, d*K, H*W) → (B, d, K, H, W)
+        # k_unfold: (B, d*K, Ha*Wa) → (B, d, K, Ha, Wa)
         k_unf = F.unfold(k, kernel_size=2 * R + 1, padding=R, stride=1)
-        k_unf = k_unf.view(B, d, K, H, W)
+        k_unf = k_unf.view(B, d, K, Ha, Wa)
         v_unf = F.unfold(v, kernel_size=2 * R + 1, padding=R, stride=1)
-        v_unf = v_unf.view(B, d, K, H, W)
+        v_unf = v_unf.view(B, d, K, Ha, Wa)
 
-        # Unfold dyn_mask for semantic bias: (B, 1, K, H, W)
-        mask_unf = F.unfold(dyn_mask, kernel_size=2 * R + 1, padding=R, stride=1)
-        mask_unf = mask_unf.view(B, 1, K, H, W)
+        # Unfold dyn_mask for semantic bias: (B, 1, K, Ha, Wa)
+        mask_unf = F.unfold(dyn_a, kernel_size=2 * R + 1, padding=R, stride=1)
+        mask_unf = mask_unf.view(B, 1, K, Ha, Wa)
 
         # Unfold velocity for velocity-matching bias
-        if velocity is not None:
+        if vel_a is not None:
             vel_h_unf = F.unfold(
-                velocity[:, 0:1], kernel_size=2 * R + 1, padding=R, stride=1)
-            vel_h_unf = vel_h_unf.view(B, 1, K, H, W)
+                vel_a[:, 0:1], kernel_size=2 * R + 1, padding=R, stride=1)
+            vel_h_unf = vel_h_unf.view(B, 1, K, Ha, Wa)
             vel_w_unf = F.unfold(
-                velocity[:, 1:2], kernel_size=2 * R + 1, padding=R, stride=1)
-            vel_w_unf = vel_w_unf.view(B, 1, K, H, W)
+                vel_a[:, 1:2], kernel_size=2 * R + 1, padding=R, stride=1)
+            vel_w_unf = vel_w_unf.view(B, 1, K, Ha, Wa)
 
         # Semantic prior conditioning
-        prior = self.prior_proj(per_cls_masks)
+        prior = self.prior_proj(masks_a)
 
         # Bias weights
         vel_w = torch.sigmoid(self.vel_bias_logit)
@@ -139,36 +160,41 @@ class SemanticQueryFutureHead(nn.Module):
             # Query
             h_emb = self.horizon_embed(
                 torch.tensor(t, device=bev.device))
-            h_map = h_emb.view(1, C, 1, 1).expand(B, C, H, W)
-            q_input = bev + h_map + prior
-            q = self.q_proj(q_input)  # (B, d, H, W)
+            h_map = h_emb.view(1, C, 1, 1).expand(B, C, Ha, Wa)
+            q_input = bev_a + h_map + prior
+            q = self.q_proj(q_input)  # (B, d, Ha, Wa)
 
-            # Vectorized score: (B, K, H, W)
-            # score[b,k,h,w] = sum_d q[b,d,h,w] * k_unf[b,d,k,h,w] * scale
-            q_exp = q.unsqueeze(2)  # (B, d, 1, H, W)
-            score = (q_exp * k_unf).sum(dim=1) * self.scale  # (B, K, H, W)
+            # Vectorized score: (B, K, Ha, Wa)
+            q_exp = q.unsqueeze(2)  # (B, d, 1, Ha, Wa)
+            score = (q_exp * k_unf).sum(dim=1) * self.scale  # (B, K, Ha, Wa)
 
-            # Add semantic bias: (B, K, H, W)
+            # Add semantic bias: (B, K, Ha, Wa)
             score = score + sem_bias.squeeze(1)
 
             # Add velocity-matching bias
-            if velocity is not None:
+            if vel_a is not None:
                 # gap = offset + v * dt (per key position)
-                gap_h = off_h + vel_h_unf * dt  # (B, 1, K, H, W)
-                gap_w = off_w + vel_w_unf * dt  # (B, 1, K, H, W)
-                vel_bias = -(gap_h ** 2 + gap_w ** 2)  # (B, 1, K, H, W)
+                gap_h = off_h + vel_h_unf * dt  # (B, 1, K, Ha, Wa)
+                gap_w = off_w + vel_w_unf * dt  # (B, 1, K, Ha, Wa)
+                vel_bias = -(gap_h ** 2 + gap_w ** 2)  # (B, 1, K, Ha, Wa)
                 score = score + vel_w * vel_bias.squeeze(1)
 
             # Softmax over K
-            weights = F.softmax(score, dim=1)  # (B, K, H, W)
+            weights = F.softmax(score, dim=1)  # (B, K, Ha, Wa)
 
             # Vectorized value aggregation:
-            # output[b,d,h,w] = sum_k weights[b,k,h,w] * v_unf[b,d,k,h,w]
-            w_exp = weights.unsqueeze(1)  # (B, 1, K, H, W)
-            output = (w_exp * v_unf).sum(dim=2)  # (B, d, H, W)
+            w_exp = weights.unsqueeze(1)  # (B, 1, K, Ha, Wa)
+            output = (w_exp * v_unf).sum(dim=2)  # (B, d, Ha, Wa)
+
+            # Project to full channels then upsample to original resolution
+            projected = self.out_proj(output)  # (B, C, Ha, Wa), zero-init
+            if Ha != H or Wa != W:
+                projected = F.interpolate(
+                    projected, size=(H, W), mode='bilinear',
+                    align_corners=False)
 
             # Residual (zero-init → copy at start)
-            future_t = bev + self.out_proj(output)
+            future_t = bev + projected
             future_bevs.append(future_t)
 
         return torch.stack(future_bevs, dim=1)  # (B, T, C, H, W)
