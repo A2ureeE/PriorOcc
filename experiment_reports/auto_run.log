@@ -149,3 +149,23 @@ bias(B,A) = -||B - A - v(A)*dt||^2: PCF 测出的速度直接指引注意力该�
 热启: PCF ep2 (motion branch warm, query head fresh zero-init)
 fallback 规则(用户裁定): query ep2 dyn_1s < PCF ep2 (8.95) → 回退 PCF 续训
 ----
+2026-10-22 23:09:49 [query-eval] query ep2: 暂停训练
+2026-10-22 23:09:53 [query-eval] query ep2: 600 帧三口径评测
+2026-10-22 23:11:54 [query-eval] query ep2 CURRENT mIoU/dyn/sta/cont6 = 34.05 27.32 43.66 49.45
+2026-10-22 23:11:54 [query-eval] query ep2 MODEL 1s mIoU/dyn/sta/cont6 = 17.29 7.58 31.16 36.07
+2026-10-22 23:11:54 [query-eval] query ep2 MODEL 2s mIoU/dyn/sta/cont6 = 14.25 5.49 26.75 31.10
+2026-10-22 23:11:54 [query-eval] query ep2 MODEL 3s mIoU/dyn/sta/cont6 = 13.73 6.21 24.48 28.53
+2026-10-22 23:11:54 [query-eval] query ep2 B档   1s mIoU/dyn/sta/cont6 = 19.05 10.48 31.30 35.96
+2026-10-22 23:11:54 [query-eval] query ep2 B档   2s mIoU/dyn/sta/cont6 = 15.02 7.33 26.02 30.14
+2026-10-22 23:11:54 [query-eval] query ep2 B档   3s mIoU/dyn/sta/cont6 = 13.11 5.97 23.31 27.15
+2026-10-22 23:11:54 [query-eval] FALLBACK: query ep2 dyn_1s=7.58 < PCF ep2 8.95 → 回退 PCF 续训
+2026-10-22 23:11:54 [query-eval] 从 PCF ep2 续训到 ep6 (用户裁定规则)
+2026-10-22 23:11:54 [query-eval] PCF 已从 ep2 恢复训练 (fallback), query run 废弃
+2026-10-23 00:01:09 [finish] Phase1: 等待 PCF epoch_4_ema.pth
+
+---- [多尺度 query 部署 2026-10-23 00:01:29] ----
+修复: 1s 全分辨率 200x200 R=5 (精度), 2s/3s 半分辨率 R=9 (范围, 共享 unfold)
+显存预算: 1s 4.9GB + 2s/3s 3.7GB = 8.6GB (vs 单尺度 4.5GB), 总计 ~22.2GB
+单测: 零初始化恒等 / 多尺度分组 / 速度偏置 / 向后兼容 全 PASS
+编排: pcf_finish_and_ms_launch.sh 已挂 — PCF ep4/ep6 评测 → 自动热启 query-ms → query-ms ep2/ep4/ep6 评测
+----
