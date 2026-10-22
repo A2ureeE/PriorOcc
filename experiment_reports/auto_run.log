@@ -140,3 +140,12 @@ resume-from 因 optimizer param group size mismatch 失败(新参数 dyn_boost �
 2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2 B档   3s mIoU/dyn/sta/cont6 = 13.11 5.97 23.31 27.15
 2026-10-22 19:23:14 [pcf-eval] PCF+boost ep2: 续训
 2026-10-22 19:25:14 [pcf-eval] 等待 epoch_4_ema.pth（PCF）
+2026-10-22 20:29:48 [query-eval] 等待 epoch_2_ema.pth（query）
+
+---- [Query Future Head 启动 2026-10-22 20:30:10] ----
+方案B: cross-attention + velocity-matching bias 替代 backward warp
+bias(B,A) = -||B - A - v(A)*dt||^2: PCF 测出的速度直接指引注意力该看哪里
+向量化 F.unfold + 下采样 2x: 0.42 s/it (与旧头同速), 18.1GB
+热启: PCF ep2 (motion branch warm, query head fresh zero-init)
+fallback 规则(用户裁定): query ep2 dyn_1s < PCF ep2 (8.95) → 回退 PCF 续训
+----
