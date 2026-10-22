@@ -90,6 +90,8 @@ class PriorOcc4D(BEVDepth4DOCC):
                  freeze_perception=False,
                  freeze_perception_prefixes=None,
                  sep_perception=False,
+                 enable_prior_correspondence=False,
+                 prior_correspondence=None,
                  enable_multimodal=False,
                  num_modes=3,
                  mode_cls_loss_weight=0.5,
@@ -122,7 +124,8 @@ class PriorOcc4D(BEVDepth4DOCC):
             future_semantic=enable_future_semantic,
             sem_consistency=enable_semantic_consistency,
             motion_prior=enable_motion_prior,
-            sem_continuity=enable_sem_continuity)
+            sem_continuity=enable_sem_continuity,
+            prior_correspondence=enable_prior_correspondence)
 
         self._dyn_sta_decoder_cfg = dyn_sta_decoder
         self._motion_encoder_cfg = motion_encoder
@@ -135,8 +138,11 @@ class PriorOcc4D(BEVDepth4DOCC):
         self._sem_consistency_cfg = sem_consistency
         self._motion_prior_cfg = motion_prior
         self._sem_continuity_cfg = sem_continuity
+        self._prior_correspondence_cfg = prior_correspondence
 
         self.continuity_apply_occ = continuity_apply_occ
+        self.enable_prior_correspondence = enable_prior_correspondence
+        self._prior_correspondence_cfg = prior_correspondence
         self.freeze_perception = freeze_perception
         self.frozen_prefixes = tuple(
             freeze_perception_prefixes or PERCEPTION_PREFIXES)
@@ -165,6 +171,7 @@ class PriorOcc4D(BEVDepth4DOCC):
         self.sem_consistency = None
         self.motion_prior = None
         self.sem_continuity = None
+        self.prior_corr = None
 
         self._build_4d_modules()
 
@@ -236,6 +243,9 @@ class PriorOcc4D(BEVDepth4DOCC):
             self.motion_prior = builder.build_neck(self._motion_prior_cfg)
         if self.enable_flags['sem_continuity'] and self._sem_continuity_cfg:
             self.sem_continuity = builder.build_neck(self._sem_continuity_cfg)
+        if self.enable_flags['prior_correspondence'] and \
+                self._prior_correspondence_cfg:
+            self.prior_corr = builder.build_neck(self._prior_correspondence_cfg)
 
     def loss_2d_seg(self, seg_logits, gt_semantic_2d):
         """Compute 2D semantic segmentation loss.
@@ -585,6 +595,20 @@ class PriorOcc4D(BEVDepth4DOCC):
         flow = self.scmf(fused_bev, motion_feat, semantic_bev, attn_feat)
         if self.motion_prior is not None and flow is not None:
             flow = self.motion_prior(flow, per_cls_masks)
+
+        # Prior-gated correspondence flow: measure dynamic displacement from
+        # history (correlation) instead of hypothesizing it (regression).
+        # The SCMF flow handles the global/ego component; PCF adds the
+        # per-object measured displacement, gated by the dynamic mask.
+        if self.prior_corr is not None and flow is not None:
+            hist_idx = self.prior_corr.history_index
+            bev_cur_raw = bev_feat_list[0]  # key frame, 64-ch, pre-encoder
+            if len(bev_feat_list) > hist_idx:
+                bev_hist_raw = bev_feat_list[hist_idx]  # aligned history, 64-ch
+            else:
+                bev_hist_raw = None
+            flow_add = self.prior_corr(bev_cur_raw, bev_hist_raw, dyn_mask)
+            flow = flow + flow_add
         if return_semantic_masks:
             motion_aux = dict(
                 per_cls_masks=per_cls_masks,

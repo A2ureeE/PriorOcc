@@ -13,6 +13,7 @@ from .future_semantic import FutureSemanticPredictor
 from .semantic_motion_prior import (SemanticMotionPrior,
     SemanticMultimodalMotionPrior)
 from .semantic_continuity import SemanticContinuityLoss
+from .prior_correspondence import PriorCorrespondenceFlow
 
 __all__ = [
     'DepthNet', 'SemanticInjector', 'LanguageSelfGating',
@@ -24,4 +25,5 @@ __all__ = [
     'SemanticBEVProjector', 'SemConsistencyLoss',
     'FutureSemanticPredictor', 'SemanticMotionPrior',
     'SemanticContinuityLoss', 'MultimodalSemanticConditionedMotionField',
-    'MultimodalSCMFEnhancedPredictor', 'SemanticMultimodalMotionPrior']
+    'MultimodalSCMFEnhancedPredictor', 'SemanticMultimodalMotionPrior',
+    'PriorCorrespondenceFlow']

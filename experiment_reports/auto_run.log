@@ -87,3 +87,18 @@ B档  1s 19.05/10.48 | 2s 15.02/7.33 | 3s 13.11/5.97
 动态 Δ(MODEL-B) = -2.33/-1.98/-1.50 => 新初始化未来头仅训2轮, 暂不如抄当前帧, 属正常起步; 判据看 ep4/ep6 是否收窄并转正
 runner 内建评测不可用(dict 输出 vs mmdet single_gpu_test 取 result[0]); 偶数轮评测改由 stage2_even_eval.sh 在 ckpt 边界暂停->独立脚本->续训
 ----
+
+---- [2026-10-22 13:08:03] 用户裁定: 停止阶段2(ep3 中途), 转入未来头重设计 ----
+依据: ep2 诊断(全局平移退化解 + SMP 砍车辆位移 + 动态 Δ -2.33/-1.98/-1.50), 用户定位'先验指路而非假设位移', 授权算法创新(PCF 方案)。
+git 存档: a3f2b47..1533864 -> origin/PriorOcc-4D (重设计前快照)。
+保留: work_dirs/stage2-frozen/epoch_1/2*.pth 与 auto/ 全部日志作对照臂。
+----
+2026-10-22 13:36:59 [pcf-eval] 等待 epoch_2_ema.pth（PCF）
+
+---- [PCF 启动 2026-10-22 13:37:28] ----
+新创新: PriorCorrespondenceFlow (correlation-measured flow)
+SCMF(全局/自车) + PCF(物体位移, 测量) 替代 SCMF+SMP(全局+回归)
+SMP 关闭; align_after_view_transfromation=True
+合成单测: dx=+3.02/dy=+5.00 PASS; 静态区=0 PASS; 零初始化 PASS
+dry-load: 感知 559 全命中, 0 失配, prior_corr 仅 2 零初始化张量
+----
