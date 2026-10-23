@@ -103,12 +103,20 @@ class PriorCorrespondenceFlow(nn.Module):
         padded = F.pad(hist_n, (r, r, r, r), mode='constant', value=0)
 
         # Correlation volume (cosine similarity): corr[b, k, h, w] ∈ [-1, 1]
-        corr_list = []
+        # Vectorized: unfold in W dim per kernel row (21 iterations instead of 441)
+        # Memory per row: B × C × (2r+1) × H × W × 4B ≈ 215 MB (freed after each)
+        corr_rows = []
+        cur_exp = cur_n.unsqueeze(2)  # (B, C, 1, H, W) for broadcasting
         for dh in range(2 * r + 1):
-            for dw in range(2 * r + 1):
-                patch = padded[:, :, dh:dh + H, dw:dw + W]
-                corr_list.append((cur_n * patch).sum(dim=1))
-        corr = torch.stack(corr_list, dim=1)  # (B, K, H, W)
+            hist_row = padded[:, :, dh:dh + H, :]  # (B, C, H, W+2r)
+            # Unfold W dim: all 2r+1 column shifts at once
+            hist_unf = F.unfold(
+                hist_row, kernel_size=(1, 2 * r + 1), stride=1)
+            hist_unf = hist_unf.view(B, C, 2 * r + 1, H, W)
+            # Corr for all dw in this row: (B, 2r+1, H, W)
+            corr_row = (cur_exp * hist_unf).sum(dim=1)
+            corr_rows.append(corr_row)
+        corr = torch.cat(corr_rows, dim=1)  # (B, K, H, W)
 
         # Softmax over K (temperature controls sharpness)
         weights = F.softmax(corr / self.temperature, dim=1)  # (B, K, H, W)
