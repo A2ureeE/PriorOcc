@@ -101,14 +101,13 @@ class SemanticQueryFutureHead(nn.Module):
         nn.init.zeros_(self.out_proj.bias)
         self.scale = 1.0 / math.sqrt(hidden_dim)
 
-        # Pre-compute offset grids per unique radius (registered buffers)
-        self._offset_buffers = {}
+        # Pre-compute offset grids per unique radius (registered buffers
+        # so they move with .cuda(); do NOT keep separate CPU copies)
         for R in set(self.per_horizon_R):
             dh = torch.arange(2 * R + 1).repeat_interleave(2 * R + 1) - R
             dw = torch.arange(2 * R + 1).repeat(2 * R + 1) - R
             self.register_buffer(f'off_h_{R}', dh.float())
             self.register_buffer(f'off_w_{R}', dw.float())
-            self._offset_buffers[R] = (dh.float(), dw.float())
 
         # Group horizons by (ds, R) for shared unfold
         self._groups = []
@@ -183,8 +182,10 @@ class SemanticQueryFutureHead(nn.Module):
             # Semantic bias (shared within group)
             sem_bias = sem_w * mask_unf
 
-            # Offsets for this radius
-            off_h, off_w = self._offset_buffers[R]
+            # Offsets for this radius (read from registered buffers,
+            # which follow the module's device)
+            off_h = getattr(self, f'off_h_{R}')
+            off_w = getattr(self, f'off_w_{R}')
             off_h = off_h.view(1, 1, K, 1, 1)
             off_w = off_w.view(1, 1, K, 1, 1)
 

@@ -30,7 +30,7 @@ free_gpu(){
 
 eval_600(){
   # $1=ckpt $2=cfg $3=tag
-  python $EVALB $1 --cfg $2 --limit 600 > $O/evb_${3}.log 2>&1
+  python $EVALB $1 --cfg $2 --limit 600 > "$O/evb_${3}.log" 2>&1
   for k in 0 1 2 3 4 5 6; do
     lab=$(case $k in 0) echo "CURRENT";; 1) echo "MODEL 1s";; 2) echo "MODEL 2s";;
           3) echo "MODEL 3s";; 4) echo "B档   1s";; 5) echo "B档   2s";; 6) echo "B档   3s";; esac)
@@ -41,7 +41,7 @@ eval_600(){
 
 eval_full(){
   # $1=ckpt $2=cfg $3=tag
-  python $EVALB $1 --cfg $2 > $O/evb_${3}_full.log 2>&1
+  python $EVALB $1 --cfg $2 > "$O/evb_${3}_full.log" 2>&1
   for k in 0 1 2 3 4 5 6; do
     lab=$(case $k in 0) echo "CURRENT";; 1) echo "MODEL 1s";; 2) echo "MODEL 2s";;
           3) echo "MODEL 3s";; 4) echo "B档   1s";; 5) echo "B档   2s";; 6) echo "B档   3s";; esac)
@@ -62,7 +62,7 @@ log "PCF ep4: 暂停训练"
 pkill -9 -f "pcf[-]v1"
 free_gpu
 log "PCF ep4: 600帧评测"
-eval_600 $PCF_W/epoch_4_ema.pth $PCF_CFG "PCF ep4"
+eval_600 $PCF_W/epoch_4_ema.pth $PCF_CFG PCF_ep4
 log "PCF ep4: 续训"
 setsid nohup python tools/train.py $PCF_CFG \
   --work-dir $PCF_W --seed 0 --gpu-id 0 \
@@ -85,7 +85,7 @@ log "PCF ep6: 暂停训练（最终轮）"
 pkill -9 -f "pcf[-]v1"
 free_gpu
 log "PCF ep6: 全量 4818 评测"
-eval_full $PCF_W/epoch_6_ema.pth $PCF_CFG "PCF ep6"
+eval_full $PCF_W/epoch_6_ema.pth $PCF_CFG PCF_ep6
 log "PCF 最终结论已记录"
 
 # ===== Phase 3: 启动多尺度 query =====
@@ -120,7 +120,7 @@ for N in 2 4; do
   pkill -9 -f "query[-]ms"
   free_gpu
   log "query-ms ep${N}: 600帧评测"
-  eval_600 $QMS_W/epoch_${N}_ema.pth $QMS_CFG "query-ms ep${N}"
+  eval_600 $QMS_W/epoch_${N}_ema.pth $QMS_CFG query_ms_ep${N}
   log "query-ms ep${N}: 续训"
   setsid nohup python tools/train.py $QMS_CFG \
     --work-dir $QMS_W --seed 0 --gpu-id 0 \
@@ -144,5 +144,5 @@ log "query-ms ep6: 暂停训练（最终轮）"
 pkill -9 -f "query[-]ms"
 free_gpu
 log "query-ms ep6: 全量 4818 评测"
-eval_full $QMS_W/epoch_6_ema.pth $QMS_CFG "query-ms ep6"
+eval_full $QMS_W/epoch_6_ema.pth $QMS_CFG query_ms_ep6
 log "ALL DONE — PCF 6轮 + 多尺度 query 6轮 全部完成"

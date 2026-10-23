@@ -169,3 +169,35 @@ fallback 规则(用户裁定): query ep2 dyn_1s < PCF ep2 (8.95) → 回退 PCF 
 单测: 零初始化恒等 / 多尺度分组 / 速度偏置 / 向后兼容 全 PASS
 编排: pcf_finish_and_ms_launch.sh 已挂 — PCF ep4/ep6 评测 → 自动热启 query-ms → query-ms ep2/ep4/ep6 评测
 ----
+2026-10-23 01:52:09 [finish] PCF ep4: 暂停训练
+2026-10-23 01:52:14 [finish] PCF ep4: 600帧评测
+2026-10-23 01:52:14 [finish] PCF ep4 CURRENT mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4 MODEL 1s mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4 MODEL 2s mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4 MODEL 3s mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4 B档   1s mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4 B档   2s mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4 B档   3s mIoU/dyn/sta/cont6 = 
+2026-10-23 01:52:14 [finish] PCF ep4: 续训
+2026-10-23 01:54:14 [finish] Phase2: 等待 PCF epoch_6_ema.pth
+2026-10-23 04:32:15 [finish] PCF ep6: 暂停训练（最终轮）
+2026-10-23 04:32:15 [finish] PCF ep6: 全量 4818 评测
+2026-10-23 04:32:15 [finish] PCF ep6(全量) CURRENT mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF ep6(全量) MODEL 1s mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF ep6(全量) MODEL 2s mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF ep6(全量) MODEL 3s mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF ep6(全量) B档   1s mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF ep6(全量) B档   2s mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF ep6(全量) B档   3s mIoU/dyn/sta/cont6 = 
+2026-10-23 04:32:15 [finish] PCF 最终结论已记录
+2026-10-23 04:32:15 [finish] Phase3: 启动多尺度 query（热启自 PCF ep6）
+2026-10-23 04:35:15 [finish] ERROR: 多尺度 query 启动失败, 检查 /root/autodl-tmp/dataforpriorocc/auto/train_query_ms.log
+
+---- [PCF ep6 全量结果 2026-10-23 08:38:59] ----
+1s 8.81 vs B 10.26 = -1.45 (ep2 -1.53, +0.08)
+2s 5.65 vs B 7.05  = -1.40 (ep2 -1.66, +0.26)
+3s 4.43 vs B 5.76  = -1.33 (ep2 -1.57, +0.24)
+整体 mIoU 2s/3s 已超 B 档 (+0.06/+0.12); 动态区 6 轮仍全负 → warp 结构性天花板确认
+注: 原编排脚本评测因 tag 含空格未加引号被拆, ep4/ep6 评测静默未执行; 已修 tag+引号, ep6 已手工补跑
+----
+2026-10-23 08:41:24 [qms] 等待 query-ms epoch_2_ema.pth
