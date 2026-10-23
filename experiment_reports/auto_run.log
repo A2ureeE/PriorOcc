@@ -229,3 +229,4 @@ lr=2e-5 fixed, 6 轮, 1.08 s/it
 对比旧版(ep15旧架构): 2s +0.50, 3s +0.32, Avg +0.27
 SOTA定位: 超T3Former-F(19.6)和OccWorld Avg(17.14), 落后DOME(27.1)约9点
 ====
+2026-10-23 17:14:00 [dynw] 等待 dynw epoch_2_ema.pth
