@@ -96,6 +96,7 @@ class PriorOcc4D(BEVDepth4DOCC):
                  enable_dyn_boost=False,
                  enable_query_future=False,
                  query_future=None,
+                 pcf_align_only=False,
                  enable_multimodal=False,
                  num_modes=3,
                  mode_cls_loss_weight=0.5,
@@ -154,6 +155,11 @@ class PriorOcc4D(BEVDepth4DOCC):
         self.enable_query_future = enable_query_future
         self._query_future_cfg = query_future
         self.query_future_head = None
+        # pcf_align_only: align BEV features ONLY for PCF's correlation,
+        # keeping the encoder input unaligned (no distribution shift for
+        # models trained without align_after_view_transfromation).
+        self.pcf_align_only = pcf_align_only
+        self._pcf_bev_feats = None
         self.freeze_perception = freeze_perception
         self.frozen_prefixes = tuple(
             freeze_perception_prefixes or PERCEPTION_PREFIXES)
@@ -493,11 +499,21 @@ class PriorOcc4D(BEVDepth4DOCC):
             seg_logits_list.append(seg_logits)
             key_frame = False
 
-        if self.align_after_view_transfromation:
+        if self.align_after_view_transfromation and self.pcf_align_only:
+            # Safe variant: align ONLY for PCF; encoder input stays unaligned
+            # (matches what a jointly-trained encoder was trained on).
+            self._pcf_bev_feats = [bev_feat_list[0]]
+            for adj_id in range(1, self.num_frame):
+                self._pcf_bev_feats.append(self.shift_feature(
+                    bev_feat_list[adj_id],
+                    [sensor2keyegos[0], sensor2keyegos[adj_id]], bda))
+            # bev_feat_list left unmodified → encoder sees training-time dist
+        elif self.align_after_view_transfromation:
             for adj_id in range(1, self.num_frame):
                 bev_feat_list[adj_id] = self.shift_feature(
                     bev_feat_list[adj_id],
                     [sensor2keyegos[0], sensor2keyegos[adj_id]], bda)
+            self._pcf_bev_feats = None
 
         if self.sep_perception:
             # Decoupled perception (stage-2): the frozen single-frame BEV
@@ -615,11 +631,17 @@ class PriorOcc4D(BEVDepth4DOCC):
         # per-object measured displacement, gated by the dynamic mask.
         if self.prior_corr is not None and flow is not None:
             hist_idx = self.prior_corr.history_index
-            bev_cur_raw = bev_feat_list[0]  # key frame, 64-ch, pre-encoder
-            if len(bev_feat_list) > hist_idx:
-                bev_hist_raw = bev_feat_list[hist_idx]  # aligned history, 64-ch
+            if self._pcf_bev_feats is not None:
+                # pcf_align_only: read from the aligned copy
+                bev_cur_raw = self._pcf_bev_feats[0]
+                bev_hist_raw = self._pcf_bev_feats[hist_idx] \
+                    if len(self._pcf_bev_feats) > hist_idx else None
             else:
-                bev_hist_raw = None
+                bev_cur_raw = bev_feat_list[0]  # key frame, 64-ch, pre-encoder
+                if len(bev_feat_list) > hist_idx:
+                    bev_hist_raw = bev_feat_list[hist_idx]  # aligned, 64-ch
+                else:
+                    bev_hist_raw = None
             flow_add = self.prior_corr(bev_cur_raw, bev_hist_raw, dyn_mask)
             flow = flow + flow_add
         if return_semantic_masks:
