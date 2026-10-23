@@ -167,6 +167,7 @@ class BEVOCCHead2D(BaseModule):
                  num_classes=18,
                  use_predicter=True,
                  class_balance=False,
+                 dynamic_class_boost=1.0,
                  loss_occ=None,
                  ):
         super(BEVOCCHead2D, self).__init__()
@@ -197,6 +198,14 @@ class BEVOCCHead2D(BaseModule):
         self.class_balance = class_balance
         if self.class_balance:
             class_weights = torch.from_numpy(1 / np.log(nusc_class_frequencies[:num_classes] + 0.001))
+            if dynamic_class_boost != 1.0:
+                # Dynamic (moving-object) classes: indices 1..10
+                # (barrier..truck); 0=others, 11..16=static surfaces,
+                # 17=free. Boost re-directs gradient budget toward the
+                # under-funded dynamic classes (static:dynamic voxel
+                # ratio is ~75:1, and 1/log weighting is too gentle).
+                for i in range(1, min(11, num_classes)):
+                    class_weights[i] *= dynamic_class_boost
             self.cls_weights = class_weights
             loss_occ['class_weight'] = class_weights        # ce loss
         self.loss_occ = build_loss(loss_occ)

@@ -202,3 +202,30 @@ fallback 规则(用户裁定): query ep2 dyn_1s < PCF ep2 (8.95) → 回退 PCF 
 ----
 2026-10-23 08:41:24 [qms] 等待 query-ms epoch_2_ema.pth
 2026-10-23 09:37:15 [wsfixpcf] 等待 wsfixpcf epoch_2_ema.pth
+
+---- [C 续训启动 2026-10-23 09:37:35] ----
+起点: 热启 ep14_ema + fix 架构 (零训练 600帧: 21.55/17.65/15.23, 动态Δ全正)
+新增: PCF 测速 (384 参数零初始化) + pcf_align_only 安全对齐 (编码器零漂移)
+lr=2e-5 fixed, 6 轮, 1.08 s/it
+前 300 iter: 无发散, future loss 下降中
+参照: 热启 ep15 全量 21.34/17.14/14.77 ← 要打败的数字
+----
+2026-10-23 16:17:56 [wsfixpcf] wsfixpcf ep2: 暂停训练
+2026-10-23 16:24:03 [wsfixpcf] wsfixpcf ep2: 600帧评测
+2026-10-23 16:24:08 [wsfixpcf] wsfixpcf_ep2 CURRENT mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf_ep2 MODEL_1s mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf_ep2 MODEL_2s mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf_ep2 MODEL_3s mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf_ep2 B_1s mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf_ep2 B_2s mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf_ep2 B_3s mIoU/dyn/sta/cont6 = 
+2026-10-23 16:24:09 [wsfixpcf] wsfixpcf ep2: 续训
+2026-10-23 16:26:09 [wsfixpcf] 等待 wsfixpcf epoch_4_ema.pth
+
+==== [最终基线留存 2026-10-23 16:53:00] ====
+模型: smp-warmstart/epoch_14_ema + fix架构(非AR+cap[12,24,36]) 零训练
+全量4818·EMA: 当前帧 31.88 | 1s 21.33 | 2s 17.64 | 3s 15.09 (Avg 18.02)
+动态Δ(M-B): +0.80/+0.60/+0.26 全正 | 总Δ: +2.18/+2.30/+1.68
+对比旧版(ep15旧架构): 2s +0.50, 3s +0.32, Avg +0.27
+SOTA定位: 超T3Former-F(19.6)和OccWorld Avg(17.14), 落后DOME(27.1)约9点
+====
