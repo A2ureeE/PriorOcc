@@ -3,7 +3,7 @@
 # 与 final-p1 的唯一区别: 训练期恢复 LiDAR 投影深度监督（推理仍纯相机）
 #   - pipeline 加回 LoadPointsFromFile + PointToMultiViewDepth
 #   - Collect3D 补 gt_depth
-#   - loss_depth_weight = 1.0 (单目 3.0 与 stereo 0.05 的折中; 用户最终裁定)
+#   - loss_depth_weight = 3.0 (FlashOcc 单帧 baseline 默认值; FlashOcc 4D 不做未来预测故 0.05 不适用)
 #
 # 依据: ep21(有depth) 当前帧 33.83 vs 全部无depth 4D run 31~32
 #       depth 失锚是第三个未识别的退化成因
@@ -12,7 +12,7 @@ _base_ = ['./priorocc-4d-r50-final-p1.py']
 # ---- 恢复 depth 监督 ----
 model = dict(
     img_view_transformer=dict(
-        loss_depth_weight=1.0,
+        loss_depth_weight=3.0,
     ),
 )
 
