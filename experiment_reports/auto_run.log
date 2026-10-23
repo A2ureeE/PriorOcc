@@ -250,3 +250,4 @@ car:road梯度比 0.110→0.330 (3x); dry-load 653/653 全命中
 2026-10-23 19:01:28 [finalp1d] 等待 final-p1 epoch_2_ema.pth
 2026-10-23 19:02:18 [depth-switch]   进度: 30729 文件, 10 个 tar 存活
 2026-10-23 19:08:19 [depth-switch]   进度: 34149 文件, 10 个 tar 存活
+2026-10-23 19:14:20 [depth-switch]   进度: 34149 文件, 10 个 tar 存活
