@@ -32,11 +32,13 @@ model = dict(
 )
 
 # 温和续训: lr 2e-5 fixed (热启末段实际 lr=1e-5, 2x 属安全范围)
+# 注意: FixedLrUpdaterHook 不接受 lr 键, lr 须设在 optimizer 里
 lr_config = dict(
     _delete_=True,
     policy='fixed',
-    lr=2e-5,
 )
+
+optimizer = dict(lr=2e-5)
 
 runner = dict(type='EpochBasedRunner', max_epochs=6)
 

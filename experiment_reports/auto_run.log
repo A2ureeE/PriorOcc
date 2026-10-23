@@ -201,3 +201,4 @@ fallback 规则(用户裁定): query ep2 dyn_1s < PCF ep2 (8.95) → 回退 PCF 
 注: 原编排脚本评测因 tag 含空格未加引号被拆, ep4/ep6 评测静默未执行; 已修 tag+引号, ep6 已手工补跑
 ----
 2026-10-23 08:41:24 [qms] 等待 query-ms epoch_2_ema.pth
+2026-10-23 09:37:15 [wsfixpcf] 等待 wsfixpcf epoch_2_ema.pth
