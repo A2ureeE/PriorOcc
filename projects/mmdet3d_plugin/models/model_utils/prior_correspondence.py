@@ -103,28 +103,12 @@ class PriorCorrespondenceFlow(nn.Module):
         padded = F.pad(hist_n, (r, r, r, r), mode='constant', value=0)
 
         # Correlation volume (cosine similarity): corr[b, k, h, w] ∈ [-1, 1]
-        # Chunked unfold (OOM-safe): unfold CHUNK_C column shifts at once.
-        # Peak temp per chunk = 2 * CHUNK_C * (B*C*H*W) — kept <= the original
-        # 441-loop's torch.stack peak (~282MB at B=2,C=64,H=W=200). CHUNK_C=3
-        # -> ~120MB temp (147 iterations instead of 441, ~3x fewer kernels).
-        # A full 21-column unfold (410MB) OOMed at 20GB/24GB.
-        CHUNK_C = 3
         corr_list = []
-        n_rows = 2 * r + 1
-        for dh in range(n_rows):
-            hist_row = padded[:, :, dh:dh + H, :]  # (B, C, H, W+2r)
-            for dw0 in range(0, n_rows, CHUNK_C):
-                nc = min(CHUNK_C, n_rows - dw0)
-                # Slice to the chunk window so unfold yields exactly W
-                # positions (width W+nc-1 -> W patches of nc columns).
-                seg = hist_row[:, :, :, dw0:dw0 + W + nc - 1]
-                hist_unf = F.unfold(seg, kernel_size=(1, nc), stride=1)
-                # (B*C, nc, H*W) -> (B, C, nc, H, W)
-                hist_unf = hist_unf.view(B, C, nc, H, W)
-                corr_list.append(
-                    (cur_n.unsqueeze(2) * hist_unf).sum(dim=1))
-                del hist_unf
-        corr = torch.cat(corr_list, dim=1)  # (B, K, H, W)
+        for dh in range(2 * r + 1):
+            for dw in range(2 * r + 1):
+                patch = padded[:, :, dh:dh + H, dw:dw + W]
+                corr_list.append((cur_n * patch).sum(dim=1))
+        corr = torch.stack(corr_list, dim=1)  # (B, K, H, W)
 
         # Softmax over K (temperature controls sharpness)
         weights = F.softmax(corr / self.temperature, dim=1)  # (B, K, H, W)

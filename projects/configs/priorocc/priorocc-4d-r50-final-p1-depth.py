@@ -14,11 +14,6 @@ model = dict(
     img_view_transformer=dict(
         loss_depth_weight=3.0,
     ),
-    # ① 历史帧 no_grad（降显存）——逐帧在 no_grad 下跑，省历史反向图
-    # ② 历史帧拼批暂关：LSS 一次吃 4 帧×6 视角=24 图，前向瞬时峰值 ≈2×
-    #    单帧，反而比顺序跑更吃显存（实测 OOM），禁用
-    freeze_history_frames=True,
-    batch_history_frames=False,
 )
 
 # ---- mmcv 不继承基类 Python 变量, 本地重定义 pipeline ----
