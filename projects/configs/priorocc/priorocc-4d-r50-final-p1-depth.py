@@ -14,6 +14,10 @@ model = dict(
     img_view_transformer=dict(
         loss_depth_weight=3.0,
     ),
+    # ① 历史帧 no_grad + ② 历史帧拼批（共用一套 backbone，当前帧仍训练）
+    #    历史帧前向不变、只是不回传梯度 → 无分布漂移，可无缝续训
+    freeze_history_frames=True,
+    batch_history_frames=True,
 )
 
 # ---- mmcv 不继承基类 Python 变量, 本地重定义 pipeline ----

@@ -69,6 +69,7 @@ class PriorOcc4D(BEVDepth4DOCC):
                  enable_future_semantic=False,
                  enable_semantic_consistency=False,
                  freeze_history_frames=False,
+                 batch_history_frames=False,
                  max_flow_cells=5.0,
                  future_loss_weights=(1.0, 0.7, 0.5),
                  horizons_sec=(1.0, 2.0, 3.0),
@@ -112,6 +113,9 @@ class PriorOcc4D(BEVDepth4DOCC):
         self.future_loss_weights = list(future_loss_weights)
         self.horizons_sec = list(horizons_sec)
         self.freeze_history_frames = freeze_history_frames
+        # Batch all history frames into one no_grad forward pass (speed only;
+        # same math — history frames share backbone weights with the key frame).
+        self.batch_history_frames = batch_history_frames
 
         if dynamic_class_ids is None:
             dynamic_class_ids = list(range(11))
@@ -467,37 +471,69 @@ class PriorOcc4D(BEVDepth4DOCC):
         bev_feat_list = []
         depth_list = []
         seg_logits_list = []
-        key_frame = True
 
-        for img, sensor2keyego, ego2global, intrin, post_rot, post_tran in zip(
-                imgs, sensor2keyegos, ego2globals, intrins, post_rots,
-                post_trans):
-            if key_frame or self.with_prev:
-                if self.align_after_view_transfromation:
-                    sensor2keyego, ego2global = \
-                        sensor2keyegos[0], ego2globals[0]
+        n_frames = len(imgs)
+        Bsz = imgs[0].shape[0]
+        Nv = imgs[0].shape[1]
 
-                mlp_input = self.img_view_transformer.get_mlp_input(
-                    sensor2keyegos[0], ego2globals[0], intrin, post_rot,
-                    post_tran, bda)
+        def _frame_args(i):
+            """Per-frame prepare_bev_feat arguments (batch dim = Bsz)."""
+            intrin, post_rot, post_tran = \
+                intrins[i], post_rots[i], post_trans[i]
+            if self.align_after_view_transfromation:
+                s2k, e2g = sensor2keyegos[0], ego2globals[0]
+            else:
+                s2k, e2g = sensor2keyegos[i], ego2globals[i]
+            mlp_input = self.img_view_transformer.get_mlp_input(
+                sensor2keyegos[0], ego2globals[0], intrin, post_rot,
+                post_tran, bda)
+            return (imgs[i], s2k, e2g, intrin, post_rot, post_tran,
+                    bda, mlp_input)
 
-                inputs_curr = (img, sensor2keyego, ego2global, intrin,
-                               post_rot, post_tran, bda, mlp_input)
-                if key_frame or not self.freeze_history_frames:
-                    bev_feat, depth, seg_logits = \
-                        self.prepare_bev_feat(*inputs_curr)
-                else:
+        # ---- key frame (index 0): always gradient-enabled ----
+        bev_feat, depth, seg_logits = self.prepare_bev_feat(*_frame_args(0))
+        bev_feat_list.append(bev_feat)
+        depth_list.append(depth)
+        seg_logits_list.append(seg_logits)
+
+        # ---- history frames (index 1..) ----
+        hist_ids = list(range(1, n_frames))
+        if not self.with_prev:
+            for _ in hist_ids:
+                bev_feat_list.append(torch.zeros_like(bev_feat_list[0]))
+                depth_list.append(None)
+                seg_logits_list.append(None)
+        elif self.batch_history_frames and self.freeze_history_frames \
+                and len(hist_ids) >= 2:
+            # ② Batch all history frames into ONE no_grad forward. The math is
+            # identical (backbone weights are shared); only batch composition
+            # differs (BN sees n*Bsz samples) and no graph is retained.
+            args = [_frame_args(i) for i in hist_ids]
+            stacked = [torch.cat([a[j] for a in args], dim=0)
+                       for j in range(8)]
+            with torch.no_grad():
+                bev_h, depth_h, seg_h = self.prepare_bev_feat(*stacked)
+            bn = Bsz * Nv
+            for k in range(len(args)):
+                b0, b1 = k * Bsz, (k + 1) * Bsz
+                n0, n1 = k * bn, (k + 1) * bn
+                bev_feat_list.append(bev_h[b0:b1])
+                depth_list.append(
+                    depth_h[n0:n1] if depth_h is not None else None)
+                seg_logits_list.append(
+                    seg_h[n0:n1] if seg_h is not None else None)
+        else:
+            for i in hist_ids:
+                if self.freeze_history_frames:
                     with torch.no_grad():
                         bev_feat, depth, seg_logits = \
-                            self.prepare_bev_feat(*inputs_curr)
-            else:
-                bev_feat = torch.zeros_like(bev_feat_list[0])
-                depth = None
-                seg_logits = None
-            bev_feat_list.append(bev_feat)
-            depth_list.append(depth)
-            seg_logits_list.append(seg_logits)
-            key_frame = False
+                            self.prepare_bev_feat(*_frame_args(i))
+                else:
+                    bev_feat, depth, seg_logits = \
+                        self.prepare_bev_feat(*_frame_args(i))
+                bev_feat_list.append(bev_feat)
+                depth_list.append(depth)
+                seg_logits_list.append(seg_logits)
 
         if self.align_after_view_transfromation and self.pcf_align_only:
             # Safe variant: align ONLY for PCF; encoder input stays unaligned

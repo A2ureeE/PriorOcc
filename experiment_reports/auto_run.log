@@ -251,3 +251,10 @@ car:road梯度比 0.110→0.330 (3x); dry-load 653/653 全命中
 2026-10-23 19:02:18 [depth-switch]   进度: 30729 文件, 10 个 tar 存活
 2026-10-23 19:08:19 [depth-switch]   进度: 34149 文件, 10 个 tar 存活
 2026-10-23 19:14:20 [depth-switch]   进度: 34149 文件, 10 个 tar 存活
+2026-10-23 19:20:21 [depth-switch]   进度: 34149 文件, 10 个 tar 存活
+2026-10-23 19:26:22 [depth-switch]   进度: 34149 文件, 10 个 tar 存活
+2026-10-23 19:26:52 [depth-switch] 解压完成: 34149 文件, du=23G
+2026-10-23 19:26:52 [depth-switch] 杀掉无 depth 训练 (final-p1)
+2026-10-23 19:26:56 [depth-switch] GPU 已释放
+2026-10-23 19:26:56 [depth-switch] 启动带 depth 训练 (final-p1-depth)
+2026-10-23 19:31:56 [depth-switch] 带 depth 训练已启动, 检查日志...
