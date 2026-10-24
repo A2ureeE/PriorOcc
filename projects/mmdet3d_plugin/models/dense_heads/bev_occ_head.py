@@ -196,18 +196,27 @@ class BEVOCCHead2D(BaseModule):
         self.num_classes = num_classes
 
         self.class_balance = class_balance
+        # Future-only dynamic boost: loss() uses cls_weights_boost (dynamic
+        # classes x boost) when dynamic_boost_active is True, else the standard
+        # 1/log weights. Kept as separate tensors so the current-frame loss is
+        # never affected by the future-frame boost.
+        self.dynamic_boost_active = False
+        self.cls_weights_boost = None
+        self._base_cw = None
         if self.class_balance:
             class_weights = torch.from_numpy(1 / np.log(nusc_class_frequencies[:num_classes] + 0.001))
+            self.cls_weights = class_weights
+            self._base_cw = class_weights
             if dynamic_class_boost != 1.0:
                 # Dynamic (moving-object) classes: indices 1..10
                 # (barrier..truck); 0=others, 11..16=static surfaces,
-                # 17=free. Boost re-directs gradient budget toward the
-                # under-funded dynamic classes (static:dynamic voxel
-                # ratio is ~75:1, and 1/log weighting is too gentle).
+                # 17=free. Static:dynamic voxel ratio is ~75:1 and 1/log
+                # weighting is too gentle, so boost re-directs gradient.
+                boost_w = class_weights.clone()
                 for i in range(1, min(11, num_classes)):
-                    class_weights[i] *= dynamic_class_boost
-            self.cls_weights = class_weights
-            loss_occ['class_weight'] = class_weights        # ce loss
+                    boost_w[i] *= dynamic_class_boost
+                self.cls_weights_boost = boost_w
+            loss_occ['class_weight'] = class_weights        # standard ce weight
         self.loss_occ = build_loss(loss_occ)
 
     def forward(self, img_feats):
@@ -239,6 +248,16 @@ class BEVOCCHead2D(BaseModule):
         """
         loss = dict()
         voxel_semantics = voxel_semantics.long()
+        # Select class weights for this call: boosted for future occ losses
+        # (dynamic_boost_active=True), standard otherwise. Assigning into
+        # self.cls_weights/loss_occ.class_weight keeps the body below unchanged.
+        if self.class_balance and self._base_cw is not None:
+            _cw = (self.cls_weights_boost
+                   if self.dynamic_boost_active and
+                   self.cls_weights_boost is not None
+                   else self._base_cw)
+            self.cls_weights = _cw
+            self.loss_occ.class_weight = _cw
         if self.use_mask:
             mask_camera = mask_camera.to(torch.int32)   # (B, Dx, Dy, Dz)
             # (B, Dx, Dy, Dz) --> (B*Dx*Dy*Dz, )

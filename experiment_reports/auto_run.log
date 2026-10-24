@@ -258,3 +258,47 @@ car:road梯度比 0.110→0.330 (3x); dry-load 653/653 全命中
 2026-10-23 19:26:56 [depth-switch] GPU 已释放
 2026-10-23 19:26:56 [depth-switch] 启动带 depth 训练 (final-p1-depth)
 2026-10-23 19:31:56 [depth-switch] 带 depth 训练已启动, 检查日志...
+2026-10-24 03:44:41 [finalp1d] final-p1 ep2: 暂停训练
+2026-10-24 03:44:46 [finalp1d] final-p1 ep2: 600帧评测
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 CURRENT mIoU/dyn/sta/cont6 = 29.73 21.62 41.32 47.13
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 MODEL_1s mIoU/dyn/sta/cont6 = 20.01 9.33 35.26 40.41
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 MODEL_2s mIoU/dyn/sta/cont6 = 16.14 5.86 30.82 35.58
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 MODEL_3s mIoU/dyn/sta/cont6 = 14.13 4.55 27.81 32.26
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 B_1s mIoU/dyn/sta/cont6 = 18.92 9.64 32.17 36.95
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 B_2s mIoU/dyn/sta/cont6 = 15.25 6.82 27.30 31.51
+2026-10-24 03:46:43 [finalp1d] finalp1d_ep2 B_3s mIoU/dyn/sta/cont6 = 13.35 5.54 24.52 28.52
+2026-10-24 03:46:43 [finalp1d] final-p1 ep2: 续训
+2026-10-24 03:48:43 [finalp1d] 等待 final-p1 epoch_4_ema.pth
+2026-10-24 04:26:12 [wsfixpcf] wsfixpcf ep4 等待超时
+2026-10-24 10:37:25 [finalp1d] final-p1 ep4: 暂停训练
+2026-10-24 10:37:30 [finalp1d] final-p1 ep4: 600帧评测
+2026-10-24 10:39:26 [finalp1d] finalp1d_ep4 CURRENT mIoU/dyn/sta/cont6 = 30.18 22.11 41.71 47.57
+2026-10-24 10:39:26 [finalp1d] finalp1d_ep4 MODEL_1s mIoU/dyn/sta/cont6 = 20.83 10.15 36.07 41.22
+2026-10-24 10:39:26 [finalp1d] finalp1d_ep4 MODEL_2s mIoU/dyn/sta/cont6 = 17.22 6.89 31.96 36.62
+2026-10-24 10:39:26 [finalp1d] finalp1d_ep4 MODEL_3s mIoU/dyn/sta/cont6 = 15.22 5.68 28.86 33.23
+2026-10-24 10:39:26 [finalp1d] finalp1d_ep4 B_1s mIoU/dyn/sta/cont6 = 19.11 9.72 32.52 37.32
+2026-10-24 10:39:26 [finalp1d] finalp1d_ep4 B_2s mIoU/dyn/sta/cont6 = 15.30 6.80 27.44 31.68
+2026-10-24 10:39:27 [finalp1d] finalp1d_ep4 B_3s mIoU/dyn/sta/cont6 = 13.50 5.68 24.66 28.67
+2026-10-24 10:39:27 [finalp1d] final-p1 ep4: 续训
+2026-10-24 10:41:27 [finalp1d] 等待 final-p1 epoch_6_ema.pth
+2026-10-24 17:31:08 [finalp1d] final-p1 ep6: 暂停训练
+2026-10-24 17:31:13 [finalp1d] final-p1 ep6: 600帧评测
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 CURRENT mIoU/dyn/sta/cont6 = 30.37 22.36 41.82 47.55
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 MODEL_1s mIoU/dyn/sta/cont6 = 21.45 10.99 36.39 41.51
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 MODEL_2s mIoU/dyn/sta/cont6 = 17.80 7.63 32.33 36.97
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 MODEL_3s mIoU/dyn/sta/cont6 = 15.78 6.26 29.36 33.77
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 B_1s mIoU/dyn/sta/cont6 = 19.14 9.85 32.41 37.17
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 B_2s mIoU/dyn/sta/cont6 = 15.37 7.03 27.27 31.51
+2026-10-24 17:33:09 [finalp1d] finalp1d_ep6 B_3s mIoU/dyn/sta/cont6 = 13.54 5.83 24.54 28.54
+2026-10-24 17:33:09 [finalp1d] final-p1 ep6: 续训
+2026-10-24 17:35:09 [finalp1d] 等待 final-p1 epoch_8_ema.pth (Phase 1 最终轮)
+2026-10-25 00:14:21 [finalp1d] final-p1 ep8: 暂停训练 (Phase 1 完成)
+2026-10-25 00:14:21 [finalp1d] final-p1 ep8: 全量 4818 评测
+2026-10-25 00:28:58 [finalp1d] finalp1d_ep8_full CURRENT mIoU/dyn/sta/cont6 = 30.36 22.54 41.54 47.51
+2026-10-25 00:28:59 [finalp1d] finalp1d_ep8_full MODEL_1s mIoU/dyn/sta/cont6 = 21.17 10.75 36.06 41.29
+2026-10-25 00:28:59 [finalp1d] finalp1d_ep8_full MODEL_2s mIoU/dyn/sta/cont6 = 17.85 7.60 32.49 37.22
+2026-10-25 00:28:59 [finalp1d] finalp1d_ep8_full MODEL_3s mIoU/dyn/sta/cont6 = 15.86 6.16 29.71 34.13
+2026-10-25 00:28:59 [finalp1d] finalp1d_ep8_full B_1s mIoU/dyn/sta/cont6 = 18.82 9.49 32.15 36.93
+2026-10-25 00:28:59 [finalp1d] finalp1d_ep8_full B_2s mIoU/dyn/sta/cont6 = 15.09 6.60 27.22 31.49
+2026-10-25 00:28:59 [finalp1d] finalp1d_ep8_full B_3s mIoU/dyn/sta/cont6 = 13.23 5.42 24.40 28.39
+2026-10-25 00:28:59 [finalp1d] PHASE1D DONE — Phase 1 全量结论已写入, 等待 Phase 2 (动态加权) 启动

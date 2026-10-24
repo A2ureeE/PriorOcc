@@ -9,11 +9,14 @@
 #       depth 失锚是第三个未识别的退化成因
 _base_ = ['./priorocc-4d-r50-final-p1.py']
 
-# ---- 恢复 depth 监督 ----
+# ---- 恢复 depth 监督 + Phase2 动态类加权 ----
 model = dict(
     img_view_transformer=dict(
         loss_depth_weight=3.0,
     ),
+    # Phase2: 动态类(1..10) CE 权重 ×3（仅作用于未来 occ loss，当前帧保持标准 CE）
+    # 由 priorocc_4d.forward_train 的 dynamic_boost_active 开关实现 future-only
+    occ_head=dict(dynamic_class_boost=3.0),
 )
 
 # ---- mmcv 不继承基类 Python 变量, 本地重定义 pipeline ----

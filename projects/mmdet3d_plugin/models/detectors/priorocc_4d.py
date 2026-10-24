@@ -694,6 +694,9 @@ class PriorOcc4D(BEVDepth4DOCC):
                 align_corners=True)
         occ_logits = self.occ_head(occ_bev_feature)
         assert voxel_semantics.min() >= 0 and voxel_semantics.max() <= 17
+        # Current-frame occ loss uses STANDARD class weights (no dynamic boost)
+        # so the (already-degraded) current-frame mIoU is not further diluted.
+        self.occ_head.dynamic_boost_active = False
         losses.update(self.occ_head.loss(
             occ_logits, voxel_semantics, mask_camera))
 
@@ -762,6 +765,10 @@ class PriorOcc4D(BEVDepth4DOCC):
         if has_future_head and 'future_voxel_semantics' in kwargs:
             future_voxel_semantics = kwargs['future_voxel_semantics']
             future_mask_camera = kwargs.get('future_mask_camera')
+            # Enable DYNAMIC CLASS BOOST for future occ losses only. Gradient
+            # still flows back through the shared BEV encoder (making features
+            # dynamic-aware), while the current-frame loss stays balanced.
+            self.occ_head.dynamic_boost_active = True
 
             if flow is None and self.future_predictor is not None and \
                     hasattr(self.future_predictor, 'conv_gru'):
@@ -834,6 +841,8 @@ class PriorOcc4D(BEVDepth4DOCC):
                     losses[f'loss_future_semantic_{k+1}s'] = \
                         loss_sem * 0.1
 
+        # Restore standard weighting after the future block.
+        self.occ_head.dynamic_boost_active = False
         return losses
 
     def simple_test_occ(self, img_feats, img_metas=None):
