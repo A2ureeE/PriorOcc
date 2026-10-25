@@ -1,7 +1,0 @@
-2026-10-21 21:46:11 v2 串联守护启动, 等扫描 ALLDONE
-2026-10-21 22:06:11 扫描完成, 开始实验A: ep21 @ 同一4818帧
-2026-10-21 22:06:23 实验A退出码=1
-实验A 解析失败, 见 eval_ep21_same4818.log
-2026-10-21 22:06:23 best=ep15 current-frame=32.1 -> /root/autodl-tmp/dataforpriorocc/work_dirs/smp-warmstart/epoch_15_ema.pth
-2026-10-21 22:06:23 已启动修复版短训
-2026-10-21 22:08:23 警告: 训练未存活, 不启动守护 (见 train_fix.log)

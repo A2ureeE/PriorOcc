@@ -34,3 +34,9 @@ PlotNeuralNet/
 
 # 实验日志（本地记录，不纳入版本管理）
 EXPERIMENT_LOG.md
+# 发布权重与过程产物（本地留存，不上传）
+released_ckpts/
+*.pth
+*.log
+*.pkl
+logs/

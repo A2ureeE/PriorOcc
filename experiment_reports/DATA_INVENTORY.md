@@ -402,3 +402,28 @@
 | 洞率指标 | `tools/stage1/hole_rate.py` |
 | 设计文档（早期） | `experiment_reports/future_head_redesign.md` |
 | SOTA 参照表 | `nextstep.md` L17-50 |
+
+---
+
+## K. final-p1-depth 系列（论文主模型，2026-10-24~25）
+
+热启源：单帧 ep21（当前帧 33.83）。配置链见 `FINAL_MODEL_ep10.md`。全部为 **全量 4818 · EMA**。
+
+### K1. 分阶段结果与动态 Δ(MODEL−B档)
+
+| 阶段 | 轮次 | 当前帧 | 未来1s | 未来2s | 未来3s | 动态Δ 1s/2s/3s |
+|---|---|---|---|---|---|---|
+| Phase1 (无boost, lr1e-4) | ep8 | 30.36 | 21.17 | 17.85 | 15.86 | +1.26/+1.00/+0.74 |
+| **Phase2 (uniform boost=3, lr1e-5)** | **ep10 ★best** | **30.58** | **22.12** | **18.78** | **16.69** | **+2.93/+2.67/+2.32** |
+| Phase2 | ep11 | 30.63 | 22.09 | 18.73 | 16.65 | ≈同 |
+| Phase2 | ep12 | 30.49 | 22.05 | 18.73 | 16.65 | ≈同 |
+| Phase3 (逐类 bus×5/bike×6, 探针) | ep11 | 30.75 | 22.06 | 18.76 | 16.65 | +2.80/+2.65/+2.28 |
+
+### K2. 关键结论（含负结果，均为消融证据）
+1. **动态类加权（Phase1→Phase2）**：动态 Δ 从 ~+1.1 跳到 ~+2.9（远超 ±0.5 噪声），未来 mIoU +0.8~0.95，当前帧 +0.22 不受损 → 加权有效且 future-only 代价隔离成立。
+2. **加权饱和（Phase2 内）**：ep10→ep12 动态 Δ 三项变化 ≤0.03 → boost 红利一轮吃完，ep10 为 best。
+3. **逐类加权无增益（Phase3）**：bus/trailer×5、小目标×6 相对 uniform×3 全在噪声内、无提升 → **加权轴已穷尽**；bus 负 Δ 属位移精度/几何病，须 flow/attention（未做）。
+4. **训练提速全部 OOM（负结果）**：PCF向量化/历史no_grad/历史拼批/horizon拼批在 97.6% 显存（未来 occ_head 3×921MB logits 为峰值源）下均 OOM，已回退，未获速度收益。
+
+### K3. 发布权重
+`released_ckpts/final-p1-depth_phase2_ep10_ema.pth`（主模型）、`...ep10.pth`（原始，可续训）、`...phase1_ep8_ema.pth`（boost 消融对照）。均 gitignore，不上传。
