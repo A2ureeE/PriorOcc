@@ -207,14 +207,25 @@ class BEVOCCHead2D(BaseModule):
             class_weights = torch.from_numpy(1 / np.log(nusc_class_frequencies[:num_classes] + 0.001))
             self.cls_weights = class_weights
             self._base_cw = class_weights
-            if dynamic_class_boost != 1.0:
-                # Dynamic (moving-object) classes: indices 1..10
-                # (barrier..truck); 0=others, 11..16=static surfaces,
-                # 17=free. Static:dynamic voxel ratio is ~75:1 and 1/log
-                # weighting is too gentle, so boost re-directs gradient.
+            # dynamic_class_boost: scalar (uniform over dynamic idx 1..10) OR a
+            # mapping {class_index: multiplier} for per-class targeting (Phase3:
+            # bus/trailer/constr x5, bicycle/motorcycle/pedestrian x6, rest x3).
+            _is_num = isinstance(dynamic_class_boost, (int, float)) and \
+                not isinstance(dynamic_class_boost, bool)
+            boost_w = None
+            if _is_num and dynamic_class_boost != 1.0:
                 boost_w = class_weights.clone()
                 for i in range(1, min(11, num_classes)):
                     boost_w[i] *= dynamic_class_boost
+            elif (not _is_num) and hasattr(dynamic_class_boost, 'items'):
+                boost_w = class_weights.clone()
+                for idx, mult in dynamic_class_boost.items():
+                    if idx == '_delete_':
+                        continue
+                    idx = int(idx)
+                    if 1 <= idx < num_classes:
+                        boost_w[idx] *= float(mult)
+            if boost_w is not None:
                 self.cls_weights_boost = boost_w
             loss_occ['class_weight'] = class_weights        # standard ce weight
         self.loss_occ = build_loss(loss_occ)
