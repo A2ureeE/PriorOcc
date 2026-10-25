@@ -13,9 +13,30 @@ from projects.mmdet3d_plugin.core.evaluation.occ_metrics import Metric_mIoU
 ap = argparse.ArgumentParser()
 ap.add_argument('ckpt'); ap.add_argument('--limit', type=int, default=0)
 ap.add_argument('--cfg', default='projects/configs/priorocc/priorocc-4d-r50-smp-sdp-holefill-nodepth.py')
+ap.add_argument('--no-points', action='store_true', dest='no_points',
+                help='strip LiDAR-point loading from test pipeline (camera-only eval)')
 a = ap.parse_args()
 
 cfg = Config.fromfile(a.cfg); cfg.data.test.test_mode = True
+if a.no_points:
+    def _strip(pl):
+        out = []
+        for s in pl:
+            t = s.get('type', '')
+            if t in ('LoadPointsFromFile', 'LoadPointsFromMultiSweeps', 'PointToMultiViewDepth'):
+                continue
+            s = dict(s)
+            if t == 'MultiScaleFlipAug3D':
+                s['transforms'] = [dict(tt, keys=[k for k in tt.get('keys', []) if k != 'points'])
+                                   if tt.get('type') == 'Collect3D' else tt for tt in s.get('transforms', [])]
+            if t == 'Collect3D':
+                s['keys'] = [k for k in s.get('keys', []) if k != 'points']
+            out.append(s)
+        return out
+    if 'test' in cfg.data:
+        cfg.data.test.pipeline = _strip(cfg.data.test.pipeline)
+    if cfg.get('evaluation', None) is not None and 'pipeline' in cfg.evaluation:
+        cfg.evaluation.pipeline = _strip(cfg.evaluation.pipeline)
 ds = build_dataset(cfg.data.test)
 model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
 load_checkpoint(model, a.ckpt, map_location='cpu')
