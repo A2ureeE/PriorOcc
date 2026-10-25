@@ -21,6 +21,26 @@
 - **FlashOcc**：官方 R50 在 Occ3D-nuScenes val ≈32（README/论文）。本机想用官方权重复现，但 (a) 我们仓库的 flashocc 配置被加了 SGDM/语义模块与官方权重不匹配、(b) 官方仓库与本项目共用 `projects.mmdet3d_plugin` 触发 Swin 重复注册 → 需隔离环境才能干净跑，为一个 baseline 格子不划算，故用发布值。
 - **BEVDet**：仓库内无权重/结果；需你给出可引用的论文具体值（注明相机 vs 相机+LiDAR 口径）再填。
 
+## 逐类 IoU（当前帧，@6019）
+
+**可得性**：ep21 ✅ 实测；ep10(4D) ✅ 见 `RESULTS_perclass_ep10.md`；**ab-on ✗**（权重已删，无法复测，只可按同族偏移估聚合）；**FlashOcc ✗**（本机未测，官方发布仅聚合 mIoU，无同口径逐类）；**BEVDet ✗**（无权重/结果）。
+
+**ep21 单帧 逐类 IoU（@6019，当前帧 mIoU 34.18）**：
+
+| 动态类 | IoU | | 静态面 | IoU |
+|---|---|---|---|---|
+| barrier | 40.64 | | driveable_surface | 79.24 |
+| bicycle | 16.47 | | other_flat | 38.44 |
+| bus | 39.46 | | sidewalk | 49.70 |
+| car | 45.33 | | terrain | 53.05 |
+| construction_vehicle | 18.29 | | manmade | 38.53 |
+| motorcycle | 18.40 | | vegetation | 33.44 |
+| pedestrian | 20.63 | | | |
+| traffic_cone | 19.30 | | | |
+| trailer | 29.94 | | | |
+| truck | 31.90 | | | |
+| others | 8.31 | | | |
+
 ## 待办
 - [ ] BEVDet：填入可引用的公开 mIoU（需来源）。
 - [ ] （可选）若要 flashocc 实测：给官方仓库建独立环境后跑其 test.py。
